@@ -12,7 +12,7 @@ General Public License along with this program (LICENSE in the source, licenses\
 a release). If not, see <https://www.gnu.org/licenses/>.
 
 Source: download the exact source of this build from its page on YouGame (Download source),
-https://staging.yougame.co/g/melee-unlocked
+https://yougame.co/g/melee-unlocked
 
 Releases up to and including 0.8.1 were published under GPL-2.0-or-later. Starting with 0.8.5
 the project is published under GPL-3.0-or-later. Source files whose header names another

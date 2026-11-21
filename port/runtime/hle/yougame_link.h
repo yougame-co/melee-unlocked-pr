@@ -79,10 +79,11 @@ void start_channel(bool automated);
 // The Online menu opened: probe again (at most once every 5 s). Never waits; returns at once.
 void online_menu_opened();
 // The online menu's first row while YouGame is not found (coming_soon()). When the YouGame app is
-// installed (its yougame-staging link type: the registry on Windows, xdg-mime on Linux) it reads
-// "Open YouGame": picking it, or entering the Online menu once per run, opens the app on the game's page
-// and looks for it every second for 25 s ("Opening YouGame..."). Otherwise "Get YouGame" opens
-// https://staging.yougame.co/desktop in the player's browser. Hidden or headless runs only log, unless
+// installed (its yougame link type, yougame-staging when the launcher chose staging: the registry on
+// Windows, xdg-mime on Linux) it reads "Open YouGame": picking it, or entering the Online menu once per
+// run, opens the app on the game's page and looks for it every second for 25 s ("Opening YouGame...").
+// Otherwise "Get YouGame" opens https://yougame.co/desktop (staging.yougame.co/desktop when the
+// launcher chose staging) in the player's browser. Hidden or headless runs only log, unless
 // MELEE_TEST_YOUGAME_GET_PAGE=1. Never waits on the game's frame.
 void open_get_page();
 void first_row_picked();

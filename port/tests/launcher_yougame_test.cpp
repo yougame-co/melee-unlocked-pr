@@ -183,6 +183,22 @@ int main(int argc, char** argv) {
     CHECK(ini_lines().find("yougame_app") == std::string::npos);
     CHECK(!account().signed_in && ini_lines().find("yougame_session") == std::string::npos);
   }
+  // The YouGame site: production by default; launcher.ini yougame_env=staging is the only way to staging, and
+  // production writes no yougame_env line.
+  {
+    CHECK(env().id == "production");
+    CHECK(ini_lines().find("yougame_env") == std::string::npos);
+    CHECK(load_line("yougame_env=staging") && env().id == "staging");
+    CHECK(ini_lines().find("yougame_env=staging\n") != std::string::npos);
+    CHECK(load_line("yougame_env=production") && env().id == "production");
+    CHECK(ini_lines().find("yougame_env") == std::string::npos);
+    CHECK(load_line("yougame_env=staging") && load_line("yougame_env=Staging") && env().id == "production");
+    CHECK(load_line("yougame_env=") && env().id == "production");
+    set_env("staging");
+    CHECK(env().id == "staging" && ini_lines().find("yougame_env=staging\n") != std::string::npos);
+    set_env("anything else");
+    CHECK(env().id == "production" && ini_lines().find("yougame_env") == std::string::npos);
+  }
   // Parsing: incomplete, complete, oversize, chunked refused.
   {
     HttpRequest r;

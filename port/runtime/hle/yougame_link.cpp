@@ -21,6 +21,7 @@
 #include "yougame_friends.h"
 #include "yougame_slippi_link.h"
 #include "yougame_compatibility.h"
+#include "yougame_env.h"
 #include "slippi_online.h"
 #include "yougame_exit_reason.h"
 #include "yougame_ranked.h"
@@ -2282,18 +2283,29 @@ void channel_closed(const std::shared_ptr<channel::Connection>& conn) {
     looking = false;
   }).detach();
 }
-// Which YouGame this build looks for. The GitHub build (MELEE_YOUGAME_START_STAGING off) uses YouGame
-// itself (its app, its channel, its site); a test build (on) uses staging only, as before.
+// Which YouGame this game uses (its app, its channel, its app link, its Get YouGame page, its site):
+// production (yougame.co) unless the launcher's launcher.ini says yougame_env=staging (yougame_env.h),
+// the same setting the launcher itself follows. Read once per run. A build made with
+// MELEE_YOUGAME_START_STAGING (a staging test build) always uses staging.
+bool start_staging() {
 #ifdef MELEE_YOUGAME_START_STAGING
-constexpr bool kStartStaging = true;
+  return true;
 #else
-constexpr bool kStartStaging = false;
+  static const bool staging = [] {
+    wchar_t module[MAX_PATH]{};
+    if (!GetModuleFileNameW(nullptr, module, MAX_PATH)) return false;
+    const bool yes = env::chosen_staging(std::filesystem::path(module).parent_path());
+    if (yes) host::log("yougame: YouGame Staging (launcher.ini yougame_env=staging)");
+    return yes;
+  }();
+  return staging;
 #endif
+}
 // Owner 11-20: everything is on YouGame's production now (staging has no test build of a new release, and
 // searches there said "Test build not available"), so the GitHub build never falls back to YouGame Staging.
 constexpr bool kStagingFallback = false;
-// One probe: production (staging only for a staging build) (Linux: three folders each). The first that connects,
-// passes the checks and answers hello is kept. One line in the log per probe.
+// One probe: the YouGame this game uses, production unless staging was chosen (Linux: three folders
+// each). The first that connects, passes the checks and answers hello is kept. One line in the log per probe.
 // quiet: the background re-look (start_channel's watch) logs only a host it finds, not each empty look.
 bool probe_channel(bool quiet = false) {
   g_probe_started = now_ms();
@@ -2302,8 +2314,8 @@ bool probe_channel(bool quiet = false) {
   if (where.empty()) { host::log("yougame channel: refused %s", why.c_str()); return false; }
   std::string refused;
   for (const auto& candidate : where) {
-    // Production only (kStagingFallback): a YouGame Staging app is never joined by the GitHub build.
-    if (candidate.staging != kStartStaging && !kStagingFallback) continue;
+    // Only the YouGame this game uses (start_staging); never the other one (kStagingFallback is off).
+    if (candidate.staging != start_staging() && !kStagingFallback) continue;
     std::unique_ptr<channel::Connection> opened;
     why.clear();
     const auto opened_as = channel::Connection::open(candidate, &opened, &why);
@@ -3322,7 +3334,7 @@ bool open_outside(const char* target) {
 // (desktop/src/security-policy.ts deepLinkUrl) brings it up on the game's page.
 const char* app_link(bool staging) { return staging ? "yougame-staging://g/melee-unlocked" : "yougame://g/melee-unlocked"; }
 std::atomic<int> g_app_installed{-1};       // -1 not looked yet, 0 no, 1 yes (app_installed_now)
-std::atomic<bool> g_app_staging{kStartStaging};   // the installed app app_installed_now found is staging
+std::atomic<bool> g_app_staging{false};   // the installed app app_installed_now found is staging (start_staging() is read too)
 std::atomic<bool> g_app_opening{false};     // open_app's 25 s wait for the app's channel
 std::atomic<bool> g_app_auto_opened{false}; // the Online menu opens the app by itself once per run
 std::atomic<int64_t> g_app_opened_at{0};
@@ -3354,8 +3366,8 @@ bool app_registered(bool staging) {
 }
 bool app_installed_now() {
   if (g_app_stale.load()) { g_app_installed = 0; return false; }
-  bool yes = app_registered(kStartStaging), staging = kStartStaging;
-  if (kStagingFallback && !yes && !kStartStaging && app_registered(true)) yes = staging = true;   // a tester with only YouGame Staging
+  bool yes = app_registered(start_staging()), staging = start_staging();
+  if (kStagingFallback && !yes && !start_staging() && app_registered(true)) yes = staging = true;   // a tester with only YouGame Staging
   g_app_staging = staging;
   g_app_installed = yes ? 1 : 0;
   return yes;
@@ -3370,7 +3382,7 @@ bool open_app(const char* why) {
   if (!g_app_opening.compare_exchange_strong(idle, true)) return false;   // one opener at a time
   if (!may_open_outside("YouGame app is installed")) { g_app_opening = false; return false; }
   g_app_opened_at = now;
-  const bool ok = open_outside(app_link(g_app_staging.load()));
+  const bool ok = open_outside(app_link(start_staging() || g_app_staging.load()));
   host::log((std::string("yougame: opening the YouGame app (") + why + "): " + (ok ? "asked" : "could not be opened")).c_str());
   if (!ok) { g_app_stale = true; g_app_installed = 0; g_app_opening = false; return false; }
   std::thread([] {
@@ -3458,9 +3470,9 @@ int start_once(bool staging, bool quiet, int ask = YG_START_ASK_AT_START) {
 }
 // Only looks (quiet): which YouGame is there and whether it runs.
 int look_for_app(bool& staging) {
-  staging = kStartStaging;
+  staging = start_staging();
   int r = start_once(staging, true);
-  if (kStagingFallback && !kStartStaging && (r == YG_START_MISSING || r == YG_START_INSTALLED)) {
+  if (kStagingFallback && !start_staging() && (r == YG_START_MISSING || r == YG_START_INSTALLED)) {
     // YouGame is not running. A running (or updating) YouGame Staging is the tester's app: use it.
     // With no YouGame at all, an installed YouGame Staging is used too.
     const int rs = start_once(true, true);
@@ -3473,7 +3485,7 @@ int look_for_app(bool& staging) {
 }
 int run_start_hook(const char* why, bool automated, int ask) {
   if (kNoApp) return YG_START_UNAVAILABLE;
-  bool staging = kStartStaging;
+  bool staging = start_staging();
   int r = look_for_app(staging);   // first only look
   g_app_staging = staging;
   const bool quiet = start_hook_quiet(automated);
@@ -3512,7 +3524,7 @@ void online_menu_opened() {
 void open_get_page() {
   if (kNoApp) return;
   // A fixed https address, opened in the player's own browser; the game downloads and starts nothing.
-  const char* kUrl = kStartStaging ? "https://staging.yougame.co/desktop" : "https://yougame.co/desktop";
+  const char* kUrl = start_staging() ? "https://staging.yougame.co/desktop" : "https://yougame.co/desktop";
   static std::atomic<int64_t> last{0};
   const int64_t now = (int64_t)now_ms();
   if (now - last.load() < 3000) return;   // one page per press, not one per repeated confirm
@@ -3783,7 +3795,7 @@ void reach_open() {
   bool idle = false;
   if (!g_reach_busy.compare_exchange_strong(idle, true)) return;
   std::thread([] {
-    bool staging = kStartStaging;
+    bool staging = start_staging();
     const int r = look_for_app(staging);
     const bool known = r != YG_START_UNAVAILABLE;
     const bool running = r == YG_START_RUNNING || r == YG_START_UPDATING;
@@ -3880,7 +3892,7 @@ void reach_press(signin::Button button) {
   switch (button) {
     case signin::Button::OpenApp: reach_open_app(); break;
     case signin::Button::GetApp: {
-      open_get_page();   // https://yougame.co/desktop (a staging test build: staging's page)
+      open_get_page();   // https://yougame.co/desktop (staging chosen: staging's page)
       std::lock_guard<std::mutex> lock(g_reach_mutex);
       g_reach.page_opened();
       break;
@@ -4074,7 +4086,7 @@ void home_open_on_yougame() {
           (asked_at != 0 && (int64_t)now_ms() - asked_at < 30000 && !g_app_stale.load()))
         how = signin::Home::Opened::App;
     } else if (may_open_outside("Open on YouGame picked, page")) {
-      const bool staging = kStartStaging || g_app_staging.load();
+      const bool staging = start_staging() || g_app_staging.load();
       if (open_outside(staging ? "https://staging.yougame.co/g/melee-unlocked" : "https://yougame.co/g/melee-unlocked"))
         how = signin::Home::Opened::Site;
     }
