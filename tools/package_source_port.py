@@ -16,6 +16,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import windows_signing
+
 ROOT = Path(__file__).resolve().parents[1]
 HOST_FILES = ["MeleeUnlockedLauncher.exe", "melee_source.exe", "dxr_pathtrace.dxil", "libxess.dll",
               "nvngx.dll_meleedlss5.dll", "nvngx_dlss.dll", "nvngx_dlssd.dll", "nvngx_dlssg.dll",
@@ -111,6 +113,9 @@ def main():
             copy(source, out / "ui_sources" / source.relative_to(args.from_package / "ui_sources"))
     copy(args.from_package / "TrainingMods.md", out / "TrainingMods.md")   # the training packs are in this build
     (out / "README.txt").write_text(README.format(version=version), encoding="utf-8", newline="\r\n")
+    # Optional code signing (docs/windows-signing.md), off unless MU_SIGN_METADATA is set: after the strip
+    # (which rewrites melee_game.dll) and before the scan and the zip, so both see the signed files.
+    windows_signing.sign_release_binaries(out)
 
     total = 0
     for path in sorted(out.rglob("*")):

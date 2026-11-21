@@ -22,6 +22,7 @@ from pathlib import Path
 from verify_generated_gct import verify_generated_gct
 import build_content_release
 from build_content_release import CONTENT_BASE
+import windows_signing
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -676,6 +677,10 @@ def main():
     shutil.copy2(ROOT / "docs/third-party-training-mode-ce.txt", licenses / "training-mode-ce.txt")
     shutil.copy2(ROOT / "docs/training-mods.md", folder / "TrainingMods.md")
     shutil.copy2(ui_src / "gd_melee/ORIGIN.md", licenses / "gd-melee-origin.md")
+    # Optional code signing (docs/windows-signing.md), off unless MU_SIGN_METADATA is set. Every program
+    # this project builds is in the folder by now, and nothing below may zip or hash one before this:
+    # a signature changes the file, so the compat zip and compat.sha256 must be made from signed files.
+    windows_signing.sign_release_binaries(folder)
     # The builds for processors without AVX2 are their own download since 0.9.98, so nobody else
     # downloads them: MeleeUnlocked-<version>-compat-win64.zip, named with its SHA-256 in compat.sha256,
     # which the launcher fetches on a PC that needs it (host/updater.cpp compat_build_download).
