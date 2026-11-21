@@ -23,6 +23,7 @@
 #include <wincrypt.h>
 #include <wintrust.h>
 #include <urlmon.h>
+#include <shlobj.h>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -31,6 +32,7 @@
 #pragma comment(lib, "urlmon.lib")
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
+#pragma comment(lib, "shell32.lib")
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -89,6 +91,81 @@ struct Job {
 };
 
 std::mutex g_mutex;              // the folder, and starting the thread
+
+// The runtime folder handed to WebView2's loader. Empty means the loader finds the runtime itself, from
+// EdgeUpdate's registry record. That record can name a version folder that is gone while a newer one sits
+// beside it (seen on fresh Windows Sandbox images, even right after Microsoft's installer ran), so when the
+// loader finds nothing, the newest version folder on disk that holds the runtime is passed in instead.
+std::mutex g_browser_mutex;
+std::wstring g_browser_folder;
+
+std::wstring browser_folder() {
+  std::lock_guard<std::mutex> lock(g_browser_mutex);
+  return g_browser_folder;
+}
+
+std::wstring known_folder(REFKNOWNFOLDERID id) {
+  PWSTR path = nullptr;
+  std::wstring out;
+  if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &path)) && path) out = path;
+  CoTaskMemFree(path);
+  return out;
+}
+
+// "157.0.4341.60" -> {157, 0, 4341, 60}; anything else -> empty.
+std::vector<unsigned> version_parts(const std::wstring& name) {
+  std::vector<unsigned> parts;
+  std::wstring cur;
+  for (wchar_t c : name + L".") {
+    if (c == L'.') {
+      if (cur.empty() || cur.size() > 6) return {};
+      parts.push_back((unsigned)std::wcstoul(cur.c_str(), nullptr, 10));
+      cur.clear();
+    } else if (c >= L'0' && c <= L'9') {
+      cur += c;
+    } else {
+      return {};
+    }
+  }
+  return parts.size() == 4 ? parts : std::vector<unsigned>{};
+}
+
+// The newest <base>\Microsoft\EdgeWebView\Application\<version> folder that holds both the browser and
+// this architecture's runtime dll, per-machine install first, then per-user. Empty when there is none.
+std::wstring newest_runtime_folder() {
+#if defined(_M_ARM64) || defined(__aarch64__)
+  const wchar_t* arch = L"arm64";
+#elif defined(_WIN64)
+  const wchar_t* arch = L"x64";
+#else
+  const wchar_t* arch = L"x86";
+#endif
+  for (REFKNOWNFOLDERID id : {FOLDERID_ProgramFilesX86, FOLDERID_LocalAppData}) {
+    const std::wstring base = known_folder(id);
+    if (base.empty()) continue;
+    const std::wstring app = base + L"\\Microsoft\\EdgeWebView\\Application\\";
+    std::vector<unsigned> best;
+    std::wstring best_dir;
+    WIN32_FIND_DATAW fd;
+    const HANDLE h = FindFirstFileW((app + L"*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) continue;
+    do {
+      if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+      const std::vector<unsigned> parts = version_parts(fd.cFileName);
+      if (parts.empty() || (!best_dir.empty() && parts <= best)) continue;
+      const std::wstring dir = app + fd.cFileName;
+      const std::wstring dll = dir + L"\\EBWebView\\" + arch + L"\\EmbeddedBrowserWebView.dll";
+      if (GetFileAttributesW((dir + L"\\msedgewebview2.exe").c_str()) == INVALID_FILE_ATTRIBUTES ||
+          GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES)
+        continue;
+      best = parts;
+      best_dir = dir;
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    if (!best_dir.empty()) return best_dir;
+  }
+  return L"";
+}
 std::wstring g_folder;
 std::atomic<HWND> g_window{nullptr};
 bool g_thread_started = false;
@@ -308,7 +385,8 @@ void create_view() {
   std::error_code ec;
   std::filesystem::create_directories(folder, ec);
   g->creating = true;
-  const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(nullptr, folder.c_str(), nullptr,
+  const std::wstring browser = browser_folder();
+  const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(browser.empty() ? nullptr : browser.c_str(), folder.c_str(), nullptr,
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
           [](HRESULT hr, ICoreWebView2Environment* env) {
             if (FAILED(hr) || !env) { g->creating = false; fail_all("YouGame's sign-in could not start (Microsoft Edge WebView2)."); return S_OK; }
@@ -500,11 +578,20 @@ Reply run(std::unique_ptr<Job> job, int wait_ms) {
 
 }  // namespace
 
-static bool runtime_present() {
+static bool runtime_answers(const wchar_t* browser) {
   LPWSTR version = nullptr;
-  const bool ok = SUCCEEDED(GetAvailableCoreWebView2BrowserVersionString(nullptr, &version)) && version && *version;
+  const bool ok = SUCCEEDED(GetAvailableCoreWebView2BrowserVersionString(browser, &version)) && version && *version;
   CoTaskMemFree(version);
   return ok;
+}
+// The loader's own lookup first; when it finds nothing, the newest runtime folder on disk (browser_folder).
+static bool runtime_present() {
+  if (runtime_answers(nullptr)) return true;
+  const std::wstring dir = newest_runtime_folder();
+  if (dir.empty() || !runtime_answers(dir.c_str())) return false;
+  std::lock_guard<std::mutex> lock(g_browser_mutex);
+  g_browser_folder = dir;
+  return true;
 }
 // Asked again until it answers yes: an install made while the launcher runs counts at once.
 bool supported() {
