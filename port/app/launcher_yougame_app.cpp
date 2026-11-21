@@ -48,6 +48,10 @@ Answer read_hello(const json& answer, bool* pending) {
 #include <mutex>
 #include <thread>
 #include "yougame_channel.h"
+// YouGame's start hook, the same header the game carries (MIT, beside it in third_party/yougame_start). The
+// launcher is its own program, so this file is the one place in it that holds the hook's code.
+#define YOUGAME_START_IMPLEMENTATION
+#include "yougame_start/yougame_start.h"
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -107,6 +111,33 @@ bool start(bool staging, int wait_ms) {
     if (running(staging)) return true;
   }
   return false;
+}
+
+// The start hook's own rule (yougame_start.h yg__start_raised), so the launcher and the game agree: a full
+// "Run as administrator" token is raised; an elevated token whose desktop shell is the same user and elevated too
+// (UAC off, as in Windows Sandbox, or the built-in Administrator) is not, since every program started there has
+// those rights anyway. A plain elevated-token check here refused the hook in exactly the places the game took it.
+bool elevated() { return yg__start_raised() != 0; }
+
+int start_hook(bool staging) {
+  // As administrator the hook starts nothing and its window only says to start the game normally: the
+  // launcher's own sign-in works there, so the caller takes that instead.
+  if (elevated()) return YG_START_UNAVAILABLE;
+  yg_start_options o{};
+  o.game = "melee-unlocked";
+  o.staging = staging ? 1 : 0;
+  o.ask = YG_START_ASK_ON_USE;   // the player pressed Connect: the window may show now, Play offline goes back
+  o.name = "Melee Unlocked";     // "Play Melee Unlocked online"; needs stays 0 (offline play works)
+  // Started quietly: up to 20 s for its channel, so YG_START_OPENED means the launcher can ask it at once
+  // (and one that does not come up gets the hook's own "YouGame didn't open" window, not a silent wait).
+  o.open_wait_ms = 20000;
+  // The first YouGame that starts hidden in the tray, as the game names it (yougame_link.cpp tray_from).
+#ifdef MELEE_YOUGAME_PROD_TRAY_FROM
+  o.tray_from = staging ? "0.13.1407" : MELEE_YOUGAME_PROD_TRAY_FROM;
+#else
+  o.tray_from = staging ? "0.13.1407" : "0.13.25";
+#endif
+  return (int)yg_start(&o);
 }
 
 Answer ask(bool staging, const std::string& version, int timeout_ms) {
