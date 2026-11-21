@@ -1375,10 +1375,22 @@ void mu_slippi_online_menu_think(HSD_GObj* gp)
         OSReport("online menu: Slippi is not signed in; opening its %s\n", slp.app_state == MU_SLP_APP_UPDATE ? "update" : "log in");
     } else if ((buttons & MenuInput_Confirm) && split_layout() && !pick_slippi() && !yougame_soon() &&
                !(yg_flags & YG_ROWS_OPEN)) {
-        mn_804D6BC8.cooldown = 5;
-        sfxBack();
-        pages_notice_show("Connect YouGame in the launcher first.");
-        OSReport("online menu: row %d refused: YouGame is not signed in\n", mn_804A04F0.hovered_selection);
+        /* The launcher is not signed in to YouGame: the host asks it to open its own Connect window (EF 0x22),
+         * and the menu waits on the row as after 0x20, going on into it once the rows open. 0: no launcher to
+         * ask (the row stays refused). */
+        if (yougame_query(0x22, NULL, 0) == 1) {
+            yg_wait_slot = mn_804A04F0.hovered_selection;
+            yg_wait_frames = 0;
+            mn_804D6BC8.cooldown = 30;
+            sfxForward();
+            pages_notice_show("Sign in to YouGame in the new window.");
+            OSReport("online menu: row %d: YouGame is not signed in; opening the launcher's Connect\n", yg_wait_slot);
+        } else {
+            mn_804D6BC8.cooldown = 5;
+            sfxBack();
+            pages_notice_show("Connect YouGame in the launcher first.");
+            OSReport("online menu: row %d refused: YouGame is not signed in\n", mn_804A04F0.hovered_selection);
+        }
 #ifdef MELEE_DOUBLES
     } else if ((buttons & MenuInput_Confirm) && split_layout() && !slippi_submenu && !yougame_soon() &&
                selected_option == MU_SLP_OPT_DOUBLES) {

@@ -3642,6 +3642,28 @@ bool restart_older(const std::string& mode, std::string* error) {
   }
 }
 
+bool open_launcher_connect() {
+  // Straight to the launcher's bridge (never the app's channel): Connect is the launcher's own sign-in. The bridge
+  // answers it with only the launch token, signed in or not.
+  if (!(g_launcher || g_match_bridge) || g_bridge_url.empty() || g_bridge_token.empty()) return false;
+  std::thread([] {
+#ifdef _WIN32
+    // The game is the foreground process: let the launcher's sign-in window come to the front.
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
+    try {
+      const json answer = bridge_http({{"type", "muOpenConnect"}}, 5000);
+      const json result = answer.is_object() && answer.count("result") && answer["result"].is_object() ? answer["result"] : json::object();
+      host::log("yougame: the launcher's Connect %s", !answer.is_object() || !answer.value("ok", false) ? "was refused"
+                : result.value("signedIn", false) ? "was not needed (the launcher is signed in)"
+                : result.value("opening", false) ? "is opening" : "could not open");
+    } catch (const std::exception& e) {
+      host::log("yougame: the launcher's Connect: no answer (%s)", channel::log_text(e.what()).c_str());
+    }
+  }).detach();
+  return true;
+}
+
 void set_online_mode_arg(int mode) { g_online_mode_arg = mode; }
 int take_online_mode_arg() { return g_online_mode_arg.exchange(0); }
 

@@ -98,6 +98,7 @@ const UINT WM_APP_CACHE_WARM_DONE = WM_APP + 4;
 const UINT WM_APP_YOUGAME = WM_APP + 52;
 const UINT WM_APP_YOUGAME_WEB = WM_APP + 53;   // YouGame's sign-in window is done: wParam signed in, lParam heap std::string* why not
 const UINT WM_APP_YOUGAME_CONNECT = WM_APP + 54;   // test runs only (MELEE_LAUNCHER_TEST_YG_CONNECT_MS): YouGame's Connect pressed
+const UINT WM_APP_YOUGAME_OPEN_CONNECT = WM_APP + 55;   // the game's YouGame row asked for Connect (muOpenConnect)
 const UINT WM_APP_GAME_DISC = WM_APP + 61;   // lParam: heap std::string*, the 1.02 disc unpacked from an RVZ/WIA   // the YouGame session changed: save launcher.ini, repaint
 
 // Client area in layout units; S() turns these into pixels for the current DPI.
@@ -1350,6 +1351,18 @@ void yougame_connect() {
   // and the sign-in window is never owned by this one (launcher_yougame_web.h).
   yougame_sign_in_thread(true);   // a signed-in YouGame app first (asked; started only when YouGame lists this build)
 }
+// The game's YouGame row was pressed while the launcher is not signed in to YouGame (muOpenConnect, posted from the
+// bridge's thread): Connect's own sign-in starts, or its window comes to the front when it is already open. Unlike
+// the Connect button it never offers Disconnect: a launcher that is signed in has nothing to do here.
+void yougame_open_connect_from_game() {
+  const launcher::yougame::Account a = launcher::yougame::account();
+  if (vanilla_active() || (a.signed_in && !a.app)) { log_line("yougame: the game asked for Connect; already signed in"); return; }
+  log_line("yougame: the game asked for Connect (a YouGame row, not signed in)");
+  if (GetTickCount64() - g_yg_closed_at < 1500) return;
+  if (g_yg_connecting.exchange(true)) { if (g_yg_start_check) g_yg_connect_queued = true; else launcher::yougame::web::raise_sign_in(); return; }
+  if (g_tab == 0) InvalidateRect(g_main, nullptr, FALSE);   // "YouGame: connecting..."
+  yougame_sign_in_thread(false);
+}
 // Play with an account the YouGame app gave while YouGame does not list this build: the app's searches would be
 // refused, so the game plays through the launcher's bridge, which needs the launcher's own sign-in. Its window
 // opens once per run, saying why (it finishes by itself when the browser view is still signed in); the game
@@ -2316,6 +2329,7 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       // Which builds YouGame allows: when it is on an older release, get that one beside this
       // version now, so the game's offer to restart in it is ready when a player takes it.
       launcher::yougame::set_restart_older(yougame_restart_older);
+      launcher::yougame::set_open_connect([] { PostMessageW(g_main, WM_APP_YOUGAME_OPEN_CONNECT, 0, 0); });
       if (!vanilla_active())
         std::thread([exe = source_exe_dir() + "\\melee_source.exe", dll = source_exe_dir() + "\\melee_game.dll",
                      version = g_active_version.empty() ? std::string(MELEE_PORT_VERSION) : g_active_version.substr(0, g_active_version.find('-'))] {
@@ -2637,6 +2651,9 @@ LRESULT CALLBACK wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_APP_YOUGAME_CONNECT:
       if (g_launcher_test) { log_line("yougame: test: Connect pressed"); yougame_connect(); }
+      return 0;
+    case WM_APP_YOUGAME_OPEN_CONNECT:
+      yougame_open_connect_from_game();
       return 0;
     case WM_APP_YOUGAME_WEB: {
       std::unique_ptr<std::string> why((std::string*)lp);

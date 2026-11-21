@@ -133,6 +133,10 @@ int menu_service();
 std::string behind_version_now(bool* can_restart = nullptr);   // can_restart: the launcher can start that release
 // Asks the launcher to start that release once this game closes, in `mode` ("ranked" or "direct").
 bool restart_older(const std::string& mode, std::string* error);
+// A YouGame row pressed while the launcher is not signed in to YouGame: asks the launcher's bridge to open its
+// own Connect (sign-in) window, or bring it to the front (muOpenConnect, off this thread). False when this game
+// has no launcher bridge to ask. The rows open once the launcher is signed in (identity() asks again).
+bool open_launcher_connect();
 // --online-mode ranked|direct: the launcher started this game for that YouGame mode. 1 ranked,
 // 2 direct, 0 none; answered once.
 void set_online_mode_arg(int mode);

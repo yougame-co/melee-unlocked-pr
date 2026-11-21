@@ -3699,6 +3699,11 @@ bool handle_command(uint8_t cmd, const uint8_t* payload, uint32_t payload_len, s
       // 0x4A: only asks whether a Squad Strike search the player chose to keep is running (the online
       // menu then keeps the select's lineup for the way back; native_practice.cpp).
       if (payload_len == 1 && payload[0] == 0x4A) { q.assign(1, slippi::native_practice::keep_search_squad() ? 1 : 0); return true; }
+      // 0x22: a YouGame row pressed while the launcher is not signed in to YouGame: the launcher's own Connect
+      // (sign-in) window opens, or comes to the front (yougame::open_launcher_connect). Answers 1 when the launcher
+      // was asked, 0 when there is no launcher to ask; the menu then waits on the row and goes on into it once the
+      // rows open, as after 0x20.
+      if (payload_len == 1 && payload[0] == 0x22) { s_yg_pick = 0; q.assign(1, yougame::open_launcher_connect() ? 1 : 0); return true; }
       if (payload_len == 1 && (payload[0] & 0xF0) == 0x10) {
       } else if (payload_len == 1 && payload[0] == 0x21) {
         s_yg_pick = 0;

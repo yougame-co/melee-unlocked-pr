@@ -72,6 +72,7 @@ const char* const kFirstYouGameRelease = "0.9.212";
 std::vector<Allowed> g_allowed;     // the builds YouGame allows, as last read
 Allowed g_behind;                    // the release to offer, version empty when none
 std::function<std::string(const Allowed&, const std::string&)> g_restart_older;
+std::function<void()> g_open_connect;   // muOpenConnect (set_open_connect)
 std::deque<std::string> g_tokens;   // newest first; a few, so a game still running keeps its own
 uint16_t g_port = 0;
 std::atomic<bool> g_bridge_up{false};
@@ -324,6 +325,13 @@ Backend real_backend() {
   // The bridge asks YouGame with the launcher's own (web) session only: an account the YouGame app gave can make
   // no request here, so the game hears "not signed in" and says to connect in the launcher.
   b.account = [] { Account a = account(); if (a.app) a.signed_in = false; return a; };
+  b.open_connect = [] {
+    std::function<void()> handler;
+    { std::lock_guard<std::mutex> lock(g_mutex); handler = g_open_connect; }
+    if (!handler) return false;
+    handler();
+    return true;
+  };
   b.player_id = [] { std::lock_guard<std::mutex> lock(g_mutex); return g_session.user_id; };
   b.code = [] {
     {
@@ -1001,6 +1009,10 @@ void set_restart_older(std::function<std::string(const Allowed&, const std::stri
   std::lock_guard<std::mutex> lock(g_mutex);
   g_restart_older = std::move(handler);
 }
+void set_open_connect(std::function<void()> handler) {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  g_open_connect = std::move(handler);
+}
 
 void set_build(const std::string& version, const std::wstring& exe, const std::wstring& game_library) {
   const json j{{"version", version}, {"exe_sha256", sha256_file(exe)}, {"game_sha256", sha256_file(game_library)}};
@@ -1095,6 +1107,12 @@ BridgeReply handle(const HttpRequest& request, const std::vector<std::string>& t
       // The version whose rooms the game searches ("" or absent: every release's shared key).
       if (const std::string pool = pool_now(); !pool.empty()) result["pool"] = pool;
       return reply(200, {{"ok", true}, {"result", result}});
+    }
+    // A YouGame row pressed while the launcher is not signed in: its own Connect opens (or comes to the front).
+    // Needs only the launch token: the player has no YouGame sign-in here yet.
+    if (type == "muOpenConnect") {
+      if (a.signed_in) return reply(200, {{"ok", true}, {"result", {{"signedIn", true}}}});
+      return reply(200, {{"ok", true}, {"result", {{"opening", backend.open_connect ? backend.open_connect() : false}}}});
     }
     if (!a.signed_in && (type == "mpCode" || type == "mpTicket" || type == "mpRank"))
       return reply(200, {{"ok", false}, {"error", "Connect YouGame in the launcher to play YouGame modes."}, {"code", "signed_out"}});

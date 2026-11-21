@@ -27,11 +27,14 @@ HttpRequest post(const std::string& body, const std::string& token = "tok", cons
 
 struct Fake {
   bool signed_in = true;
+  bool has_open_connect = true;
+  int open_connects = 0;
   std::string last_ticket;
   Backend backend() {
     Backend b;
     b.account = [this] { Account a; a.signed_in = signed_in; a.name = "Tester"; a.code = "TEST#123"; return a; };
     b.player_id = [] { return std::string("user-1"); };
+    if (has_open_connect) b.open_connect = [this] { ++open_connects; return true; };
     b.code = [] { return std::string(R"({"code":"TEST#123"})"); };
     b.rank = [](const std::string& mode) { return json{{"mode", mode}, {"rank", "Gold II"}}.dump(); };
     b.ticket = [this](const std::string& body) {
@@ -239,6 +242,23 @@ int main(int argc, char** argv) {
     const json t = call(f, post(R"({"type":"mpTicket","players":2,"mode":"singles","ranked":true})"));
     CHECK(t["ok"] == false && t["code"] == "signed_out");
     f.signed_in = true;
+  }
+  // muOpenConnect: a YouGame row pressed in the game while the launcher is not signed in opens the launcher's own
+  // Connect. It needs only the launch token; a signed-in launcher has nothing to open.
+  {
+    int status = 0;
+    CHECK(!call(f, post(R"({"type":"muOpenConnect"})", "nope"), &status).value("ok", true) && status == 401);
+    CHECK(f.open_connects == 0);
+    f.signed_in = false;
+    const json opened = call(f, post(R"({"type":"muOpenConnect"})"));
+    CHECK(opened["ok"] == true && opened["result"]["opening"] == true && f.open_connects == 1);
+    f.has_open_connect = false;   // a launcher with no handler set: answered, nothing opens
+    const json none = call(f, post(R"({"type":"muOpenConnect"})"));
+    CHECK(none["ok"] == true && none["result"]["opening"] == false && f.open_connects == 1);
+    f.has_open_connect = true;
+    f.signed_in = true;
+    const json already = call(f, post(R"({"type":"muOpenConnect"})"));
+    CHECK(already["ok"] == true && already["result"]["signedIn"] == true && f.open_connects == 1);
   }
   // mpCode, mpRank, mpFriend, unknown.
   {

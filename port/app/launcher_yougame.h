@@ -2,7 +2,8 @@
 // the launcher owns, launcher_yougame_web.h; the only sign-in there is), and the loopback bridge the game's YouGame
 // rows use (YOUGAME_BRIDGE + YOUGAME_TOKEN + MELEE_YOUGAME_LAUNCHER=1). The YouGame app is never
 // started: the launcher answers the game's few requests itself and passes tickets from YouGame's
-// site through unchanged. Requests: hello, mpCode, mpTicket, mpRank; mpFriend is answered here.
+// site through unchanged. Requests: hello, mpCode, mpTicket, mpRank; mpFriend is answered here;
+// muOpenConnect opens the launcher's own Connect window (set_open_connect).
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include <cstdint>
@@ -122,6 +123,9 @@ Allowed behind();                         // version empty: this build is allowe
 // launcher answers "" when it will start that release once the game has closed, else why not yet.
 std::string file_sha256(const std::wstring& path);   // lowercase hex, "" when unreadable
 void set_restart_older(std::function<std::string(const Allowed&, const std::string& mode)> handler);
+// A YouGame row pressed in the game while the launcher is not signed in to YouGame (muOpenConnect): the launcher's
+// Connect starts, or its sign-in window comes to the front. Called on the bridge's thread: post to the window.
+void set_open_connect(std::function<void()> handler);
 
 // ---- testable parts (port/tests/launcher_yougame_test.cpp) ----
 struct HttpRequest {
@@ -143,9 +147,10 @@ struct Backend {
   std::function<Allowed()> behind;   // may be empty
   std::function<std::string()> room_code;   // tests: the code of a held room; empty = a random one
   std::function<std::string(const std::string& mode)> restart_older;   // "" accepted, else why not
+  std::function<bool()> open_connect;   // muOpenConnect: true when Connect was asked to open; may be empty
 };
 struct BridgeReply { int status = 200; std::string body; };
-// One request to the bridge: token check, then hello / mpCode / mpTicket / mpRank / mpFriend.
+// One request to the bridge: token check, then hello / mpCode / mpTicket / mpRank / mpFriend / muOpenConnect.
 std::string new_room_code();   // 12 characters, as YouGame's app names a held room
 BridgeReply handle(const HttpRequest& request, const std::vector<std::string>& tokens, uint16_t port,
                    const Backend& backend, const std::string& build_json);
