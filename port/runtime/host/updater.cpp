@@ -562,15 +562,6 @@ void check(const std::string& current_version, bool install_experimental) {
         if (list.is_array()) break;
         from_feed = false;
       }
-      std::string feed; int feed_status = 0;
-      std::string from_feed_body;
-      if (http_get(kReleasesFeed, &feed, &feed_status) && feed_status == 200 &&
-          !(from_feed_body = releases_from_feed(feed)).empty()) {
-        host::log("updater: GET %s failed, HTTP %d: the newest releases come from the releases feed instead", REPO_API, status);
-        list = nlohmann::json::parse(from_feed_body, nullptr, false);
-        from_feed = true;
-        break;
-      }
       const int wait = check_retry::delay_ms(++failures, quiet);
       host::log("updater: GET %s failed (ask %d), HTTP %d, error %lu%s%s", REPO_API, failures, status, error,
                 answered ? ", not a release list" : "", wait < 0 ? "" : "; asking again shortly");
