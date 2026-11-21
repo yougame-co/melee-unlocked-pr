@@ -575,6 +575,7 @@ add_test(NAME port_game_state_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE
 add_test(NAME port_search_keep_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/search_keep_wiring_test.py")
 add_test(NAME port_restart_keeps_signin_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/restart_keeps_signin_wiring_test.py")
 add_test(NAME port_socket_open_retry_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/socket_open_retry_wiring_test.py")
+add_test(NAME port_slow_load_start_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/slow_load_start_wiring_test.py")
 add_test(NAME port_yougame_app_button_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/yougame_app_button_wiring_test.py")
 add_test(NAME port_build106_fixes_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/build106_fixes_wiring_test.py")
 add_test(NAME port_standalone_update_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/standalone_update_wiring_test.py")
