@@ -48,6 +48,29 @@ need(re.search(r"g_stdio\s*\?\s*bridge_stdio\([^)]*\)\s*:\s*routed_to_bridge\(bo
      "bridge() routes stdio, then the hybrid's launcher bridge, then the channel, then HTTP")
 need("(hybrid || !std::getenv(\"YOUGAME_BRIDGE\"))" in link, "the hybrid keeps the channel allowed alongside the launcher's bridge")
 need("channel::to_launcher_bridge(" in link, "the hybrid route is the pure rule in yougame_channel.h")
+# The launcher not signed in to YouGame while the app's channel names a player: matches go over the app's channel
+# with the app's sign-in, decided on every identity ask; the launcher's sign-in is asked first and wins.
+need("g_channel_up.load(), g_app_sign_in.load());" in link, "the hybrid route follows whose sign-in is used")
+ident = re.search(r"Identity fetch_identity\(.*?\n\}", link, re.S)
+need(ident is not None, "fetch_identity found")
+if ident:
+    body = ident.group(0)
+    need("channel::hybrid_sign_in(launcher_player, g_channel_up.load(), channel::hello_player(app_hello))" in body,
+         "fetch_identity picks the sign-in with the pure rule")
+    need(body.find("bridge({{\"type\", \"hello\"}}") < body.find("bridge_channel({{\"type\", \"hello\"}}"),
+         "the launcher's hello comes first, the app's only after it")
+    need("if (!launcher_player && g_channel_up.load()) {" in body,
+         "the app is asked only when the launcher names nobody (even after a signed-out hello: its sign-in panel)")
+    need("g_app_sign_in = app;" in body and "via_channel = app;" in body, "the app's sign-in routes and reads as the channel's")
+    need("matches go through %s with %s" in body, "the log says which sign-in is used")
+closed_fn = re.search(r"void channel_closed\(.*?\n\}", link, re.S)
+need(closed_fn is not None and "g_app_sign_in = false;" in closed_fn.group(0),
+     "the channel closing sends everything back to the launcher")
+needed = re.search(r"bool sign_in_needed\(\)\s*\{(.*?)\n\}", link, re.S)
+need(needed is not None and "g_match_bridge ||" not in needed.group(1) and
+     "channel::hybrid_offers_app_sign_in(g_identity_asked, g_identity.ok, g_channel_up.load(), g_channel_signed_out.load())"
+     in needed.group(1),
+     "neither signed in: a YouGame row opens the app's sign-in panel in the hybrid too")
 
 # Rows: a connected channel opens them; a bare start keeps "Coming soon".
 soon = re.search(r"bool coming_soon\(\)\s*\{(.*?)\n\}", link, re.S)

@@ -142,7 +142,35 @@ void lines_and_pushes() {
   for (const char* t : {"gameState", "matchState", "menuButton", "pause", "inputKind", "directAttach", "signIn", "updateGame", "openFeedback"}) {
     CHECK(!channel::to_launcher_bridge(t, true));
     CHECK(channel::to_launcher_bridge(t, false));
+    CHECK(!channel::to_launcher_bridge(t, true, true));
+    CHECK(channel::to_launcher_bridge(t, false, true));
   }
+  // The launcher not signed in, the app's channel naming a player (app_sign_in): matches go over the app's channel.
+  // Its own questions stay with the launcher (its sign-in is asked first every time), and with the channel down
+  // everything is the launcher's again.
+  for (const char* t : {"mpCode", "mpTicket", "mpRank", "mpFriend", "mpRoom"}) {
+    CHECK(!channel::to_launcher_bridge(t, true, true));
+    CHECK(channel::to_launcher_bridge(t, false, true));
+  }
+  for (const char* t : {"hello", "muRestartOlder"}) {
+    CHECK(channel::to_launcher_bridge(t, true, true));
+    CHECK(channel::to_launcher_bridge(t, false, true));
+  }
+  // Whose sign-in: the launcher's whenever it has one; else the app's while its channel is up and names a player.
+  using channel::HybridSignIn;
+  for (bool up : {true, false})
+    for (bool app : {true, false}) CHECK(channel::hybrid_sign_in(true, up, app) == HybridSignIn::Launcher);
+  CHECK(channel::hybrid_sign_in(false, true, true) == HybridSignIn::App);
+  CHECK(channel::hybrid_sign_in(false, false, true) == HybridSignIn::None);   // the app closed: play never depends on it
+  CHECK(channel::hybrid_sign_in(false, true, false) == HybridSignIn::None);
+  CHECK(channel::hybrid_sign_in(false, false, false) == HybridSignIn::None);
+  // Neither signed in: a YouGame row opens the app's sign-in panel, only once the sign-in was asked and named nobody,
+  // with the app's channel up and signed out.
+  CHECK(channel::hybrid_offers_app_sign_in(true, false, true, true));
+  CHECK(!channel::hybrid_offers_app_sign_in(false, false, true, true));   // not asked yet (the launcher may be signed in)
+  CHECK(!channel::hybrid_offers_app_sign_in(true, true, true, true));     // signed in (the launcher's or the app's)
+  CHECK(!channel::hybrid_offers_app_sign_in(true, false, false, true));   // the app's channel is down
+  CHECK(!channel::hybrid_offers_app_sign_in(true, false, true, false));   // the app is not signed out (pending)
   ++groups;
 }
 

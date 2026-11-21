@@ -315,9 +315,13 @@ bool g_launcher = false;                        // MELEE_YOUGAME_LAUNCHER=1: Mel
 // says who the player is or finds and keeps a match goes to the launcher's bridge, with the launcher's own YouGame
 // sign-in (channel::to_launcher_bridge). The app closed or gone: everything goes to the bridge, play goes on.
 bool g_match_bridge = false;
+// Hybrid, the launcher not signed in to YouGame while the app's channel names a player (channel::hybrid_sign_in
+// said App, decided on every fetch_identity): the match requests go over the app's channel with the app's sign-in,
+// as for a game the player started, instead of a refusal. Cleared when the channel closes.
+std::atomic<bool> g_app_sign_in{false};
 bool routed_to_bridge(const json& body) {
   return g_match_bridge && channel::to_launcher_bridge(body.is_object() ? body.value("type", std::string()) : std::string(),
-                                                       g_channel_up.load());
+                                                       g_channel_up.load(), g_app_sign_in.load());
 }
 // The player the app's channel last named in a hello (hybrid: compared with the launcher's sign-in, logged).
 std::mutex g_app_player_mutex;
@@ -2066,15 +2070,42 @@ std::atomic<bool> g_identity_again{false};
 Identity fetch_identity(const std::function<bool()>& cancelled = nullptr) {
   static std::once_flag said;
   std::call_once(said, [] { host::log("yougame: YouGame mode (%s%s)", g_stdio ? "stdio bridge" : g_match_bridge ? (g_channel_allowed ? "local channel for the extension, launcher bridge for matches" : "loopback bridge (the extension's channel is off in this run)") : g_channel_allowed ? "local channel" : "loopback bridge", g_embedded ? ", in the player box" : ""); });
-  const bool via_channel = !g_stdio && g_channel_allowed && !routed_to_bridge(json{{"type", "hello"}});
+  bool via_channel = !g_stdio && g_channel_allowed && !routed_to_bridge(json{{"type", "hello"}});
   Identity id;
   try {
     json hello = bridge({{"type", "hello"}}, 15000, cancelled);
     if ((cancelled && cancelled()) || search_stopped()) return id;
+    std::string sign_in_used;   // hybrid: whose sign-in this identity is (logged below)
+    if (g_match_bridge) {
+      // Hybrid: the launcher's sign-in first, every time (hello always goes to the launcher). It names nobody and
+      // the app's channel names a player: the app's sign-in, as for a game the player started, instead of a refusal.
+      note_pool(hello);   // the release the launcher searches, whoever signs in
+      const bool launcher_player = channel::hello_player(hello);
+      // Who the app's channel names, asked only when the launcher names nobody and the channel is up. Asked even when
+      // the app's last hello said signed out: after its sign-in panel this hello is what hears the new player.
+      json app_hello = json::object();
+      if (!launcher_player && g_channel_up.load()) {
+        try {
+          const json a = bridge_channel({{"type", "hello"}}, 15000, cancelled);
+          if (a.value("ok", false) && a.count("result") && a["result"].is_object()) app_hello = a["result"];
+        } catch (const std::exception& e) {
+          host::log("yougame: the YouGame app's channel did not answer its hello: %s", channel::log_text(e.what()).c_str());
+        }
+        if ((cancelled && cancelled()) || search_stopped()) return id;
+      }
+      const bool app = channel::hybrid_sign_in(launcher_player, g_channel_up.load(), channel::hello_player(app_hello)) ==
+                       channel::HybridSignIn::App;
+      g_app_sign_in = app;
+      via_channel = app;
+      if (app) hello = std::move(app_hello);
+      sign_in_used = launcher_player ? "the launcher's sign-in"
+                   : app ? "the YouGame app's sign-in (the launcher is not signed in to YouGame)"
+                   : "no sign-in (the launcher is not signed in to YouGame, and the YouGame app names nobody)";
+    }
     { std::lock_guard<std::mutex> lock(g_mutex);
       if (search_stopped()) return id;
       friends::events.hello(hello);
-      if (g_launcher || g_match_bridge) note_pool(hello);
+      if (g_launcher) note_pool(hello);   // the hybrid noted the launcher's pool above
       console::launch_hello(hello);
       if (console::requests.pending()) parity::signals.console_boot_ready();
       if (hello.count("caps") && !via_channel) console::read_caps(hello, g_relaunch);   // caps: the app's own child only
@@ -2128,13 +2159,14 @@ Identity fetch_identity(const std::function<bool()>& cancelled = nullptr) {
     id.player_id = p.value("id", "");
     id.name = p.value("name", "");
     if (g_match_bridge) {
-      // Hybrid: matches use the launcher's own sign-in. The app's channel may be signed in as someone else.
+      // Hybrid: the launcher's own sign-in when it has one (the app's channel may be signed in as someone else);
+      // else the app's, over its channel.
       std::string app_player;
       { std::lock_guard<std::mutex> lock(g_app_player_mutex); app_player = g_app_player_id; }
-      host::log("yougame: matches go through the launcher's bridge (%s); the YouGame app's channel is %s%s",
-                id.player_id.empty() ? "the launcher is not signed in to YouGame" : "the launcher's sign-in",
+      host::log("yougame: matches go through %s with %s; the YouGame app's channel is %s%s",
+                g_app_sign_in.load() ? "the YouGame app's channel" : "the launcher's bridge", sign_in_used.c_str(),
                 g_channel_up.load() ? "up" : "not up",
-                !g_channel_up.load() || app_player.empty() || id.player_id.empty() ? ""
+                g_app_sign_in.load() || !g_channel_up.load() || app_player.empty() || id.player_id.empty() ? ""
                 : app_player == id.player_id ? ", signed in as the same player"
                 : ", signed in as ANOTHER player: matches use the launcher's sign-in");
     }
@@ -2257,6 +2289,7 @@ void channel_closed(const std::shared_ptr<channel::Connection>& conn) {
     g_channel.reset();
     was_up = g_channel_up.exchange(false);
     g_channel_signed_out = false;
+    g_app_sign_in = false;   // hybrid: back to the launcher's bridge (and its sign-in) for everything
     std::lock_guard<std::mutex> io(g_io.mutex);
     g_io.eof = true;
   }
@@ -4125,9 +4158,12 @@ void home_open() {
   host::log("yougame: home box opened");
 }
 bool sign_in_needed() {
-  // Hybrid: matches use the launcher's own sign-in, so the app's signed-out state never holds a row back.
-  if (g_stdio || g_match_bridge || !g_channel_allowed || !g_channel_up.load() || !g_channel_signed_out.load()) return false;
+  if (g_stdio || !g_channel_allowed || !g_channel_up.load() || !g_channel_signed_out.load()) return false;
   std::lock_guard<std::mutex> lock(g_mutex);
+  // Hybrid: the launcher's sign-in wins, so the app's signed-out state holds a row back only once the launcher was
+  // asked and named nobody. Then a YouGame row opens the app's Sign in to YouGame panel instead of a dead end.
+  if (g_match_bridge)
+    return channel::hybrid_offers_app_sign_in(g_identity_asked, g_identity.ok, g_channel_up.load(), g_channel_signed_out.load());
   return !g_identity.ok;
 }
 void sign_in_open() {

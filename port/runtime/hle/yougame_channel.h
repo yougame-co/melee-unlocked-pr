@@ -129,11 +129,29 @@ bool hello_player(const nlohmann::json& result);
 // menuButton, pause, inputKind, sign-in and update panels); the requests that say who the player is and that find or
 // keep a match go to the launcher's bridge, with the launcher's own YouGame sign-in, so play never depends on the app.
 // With the channel down (the app closed, not started, or gone mid-session) every request goes to the bridge.
-inline bool to_launcher_bridge(const std::string& type, bool channel_up) {
-  static const char* const kMatch[] = {"hello", "mpCode", "mpTicket", "mpRank", "mpFriend", "mpRoom", "muRestartOlder"};
+// app_sign_in (hybrid_sign_in() said App): the launcher has no YouGame sign-in, so the match requests go over the
+// app's channel with the app's sign-in, as for a game the player started. The launcher's own questions (hello: who
+// is signed in to the launcher, which release it searches; muRestartOlder) stay with the launcher, so its sign-in is
+// asked first every time.
+inline bool to_launcher_bridge(const std::string& type, bool channel_up, bool app_sign_in = false) {
+  if (!channel_up || type == "hello" || type == "muRestartOlder") return true;
+  static const char* const kMatch[] = {"mpCode", "mpTicket", "mpRank", "mpFriend", "mpRoom"};
   for (const char* t : kMatch)
-    if (type == t) return true;
-  return !channel_up;
+    if (type == t) return !app_sign_in;
+  return false;
+}
+// Whose YouGame sign-in the hybrid plays with: the launcher's whenever it names a player (play never depends on the
+// app); with none, the app's while its channel is up and names a player; else nobody (the rows stay closed, and an
+// app that is up but signed out offers its sign-in: sign_in_needed()).
+enum class HybridSignIn { Launcher, App, None };
+inline HybridSignIn hybrid_sign_in(bool launcher_player, bool channel_up, bool app_player) {
+  if (launcher_player) return HybridSignIn::Launcher;
+  return channel_up && app_player ? HybridSignIn::App : HybridSignIn::None;
+}
+// The hybrid offers the app's own sign-in panel for a YouGame row only when the sign-in was asked and named nobody
+// (neither the launcher's nor the app's), and the app's channel is up and says nobody is signed in there.
+inline bool hybrid_offers_app_sign_in(bool asked, bool signed_in, bool channel_up, bool app_signed_out) {
+  return asked && !signed_in && channel_up && app_signed_out;
 }
 
 // ---- playerPending (pure): after a pending hello answer, say hello again ~2 s and ~6 s later.
