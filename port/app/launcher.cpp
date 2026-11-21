@@ -2020,12 +2020,18 @@ void launch_game_now() {
         (app_channel.empty() ? std::string("no app channel for this user now") : "the " + app_channel + " app is running") + ").";
 #else
   const std::string yougame_bridge = vanilla_active() || app_backed ? std::string() : launcher::yougame::bridge_url();
+  // Why not the app's channel, first reason that applies (the line used to say "no YouGame app" for all of them).
+  const std::string bridge_why = (yg_account.signed_in && !yg_account.app) ? "the launcher's own sign-in"
+      : !yg_same_env ? "this build plays on the other YouGame than the launcher's"
+      : !launcher::yougame::listed_current() ? "YouGame does not list this build yet"
+      : !launcher::yougame::app_hook_available() ? "YouGame's start hook cannot run here"
+      : launcher::yougame::app_declined() ? "Disconnect was chosen for the app's account" : "no YouGame app";
   const std::string yougame_decision = vanilla_active() ? std::string()
       : app_backed ? "YouGame: no launcher sign-in; the game uses the YouGame app's channel (" +
                          (app_channel.empty() ? std::string("the app is not running; a YouGame row asks for it with YouGame's start hook") : "the " + app_channel + " app is running") + ")."
       : hybrid ? "YouGame: the game uses the launcher's bridge for matches and the YouGame app's channel for the extension (" +
                      (app_channel.empty() ? std::string("the app is not running; it is not started for the extension") : "the " + app_channel + " app is running") + ")."
-      : std::string("YouGame: the game uses the launcher's bridge (extension off: no YouGame app).");
+      : "YouGame: the game uses the launcher's bridge (extension off: " + bridge_why + ").";
 #endif
   if (!yougame_decision.empty()) log_line("%s", yougame_decision.c_str());
   // Test runs only (MELEE_LAUNCHER_TEST): extra game arguments (hidden, local peering instead of
