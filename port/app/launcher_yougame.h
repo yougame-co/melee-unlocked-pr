@@ -43,8 +43,12 @@ void sign_out();
 // running; else only a running app is asked. `version`: this build, named in the hello as the game does.
 // Blocking (seconds; up to ~30 s when it starts the app): never on the window thread.
 // kSignedIn: account() is the app's player (app = true). Otherwise nothing changed. *detail: every step taken.
-enum class AppSignIn { kSignedIn, kSignedOut, kNoApp, kNoAnswer };
-AppSignIn sign_in_app(bool may_start, const std::string& version, std::string* detail);
+// sign_in_there (Connect): when the app is signed out, sign in through the app's own sign-in window (YouGame Online's),
+// waiting for the player there, so the session is the app's and carries over to the full app. kAppWindow: that window
+// opened and the player closed it or did not finish; the caller opens no sign-in of its own. An app with no window of
+// its own answers kSignedOut as before.
+enum class AppSignIn { kSignedIn, kSignedOut, kNoApp, kNoAnswer, kAppWindow };
+AppSignIn sign_in_app(bool may_start, const std::string& version, std::string* detail, bool sign_in_there = false);
 // The disc this launcher starts the game with (its own copy: the vanilla disc, also under a mod), told to the running
 // YouGame app (YouGame Online or the full app) for this environment, so YouGame can check the player's own copy. For
 // a start on this launcher's bridge, where the game is not on the app's channel and so never tells it itself

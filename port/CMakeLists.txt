@@ -579,6 +579,7 @@ add_test(NAME port_slow_load_start_wiring COMMAND "${Python3_EXECUTABLE}" -B "${
 add_test(NAME port_yougame_app_button_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/yougame_app_button_wiring_test.py")
 add_test(NAME port_build106_fixes_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/build106_fixes_wiring_test.py")
 add_test(NAME port_yougame_disc_report_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/yougame_disc_report_wiring_test.py")
+add_test(NAME port_launcher_app_signin_window_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_app_signin_window_wiring_test.py")
 add_test(NAME port_standalone_update_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/standalone_update_wiring_test.py")
 add_test(NAME port_yougame_open_connect_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/yougame_open_connect_wiring_test.py")
 add_test(NAME port_launcher_yougame_app_default_wiring COMMAND "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_yougame_app_default_wiring_test.py")
