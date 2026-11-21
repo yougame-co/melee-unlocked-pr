@@ -931,6 +931,7 @@ void paint_rail(HDC dc) {
 // installed YouGame app at Melee Unlocked's page, or the site's page without the app). The two links' rectangles are kept for clicks.
 RECT g_yg_link[3] = {};   // Connect/Disconnect, Open YouGame, the extension checkbox
 std::atomic<bool> g_yg_connecting{false};   // Connect is asking the YouGame app or showing the sign-in window
+std::atomic<bool> g_yg_installing{false};   // Connect is installing Microsoft's WebView2 for the sign-in window (~1 min)
 std::atomic<bool> g_yg_start_check{false};   // the launcher's own check at start runs (it holds g_yg_connecting)
 bool g_yg_connect_queued = false;            // Connect pressed meanwhile: it runs once that check is done
 uint64_t g_yg_closed_at = 0;                // GetTickCount64 when the sign-in window last closed
@@ -955,7 +956,7 @@ void paint_yougame_line(HDC dc) {
     // The account, then its two links; the account name gives way (an ellipsis) before a link would.
     const PlayLayout l = play_layout();
     const std::wstring account = a.signed_in ? L"YouGame: " + widen(a.name) + (a.code.empty() ? L"" : L" (" + widen(a.code) + L")")
-                                             : launcher::lang::txw(g_yg_connecting ? L"YouGame: connecting..." : L"YouGame: not connected");
+                                             : launcher::lang::txw(g_yg_installing ? L"YouGame: installing the sign-in window..." : g_yg_connecting ? L"YouGame: connecting..." : L"YouGame: not connected");
     // The YouGame app's account while YouGame does not list this build: Connect (the launcher's own sign-in,
     // which the game needs to play this build) instead of Disconnect.
     const bool app_needs_web = a.app && !launcher::yougame::listed_current();
@@ -1004,7 +1005,7 @@ void paint_yougame_line(HDC dc) {
     return;
   }
   std::wstring base = a.signed_in ? L"YouGame: " + widen(a.name) + (a.code.empty() ? L"" : L" (" + widen(a.code) + L")")
-                                  : launcher::lang::txw(g_yg_connecting ? L"YouGame: connecting..." : L"YouGame: not connected");
+                                  : launcher::lang::txw(g_yg_installing ? L"YouGame: installing the sign-in window..." : g_yg_connecting ? L"YouGame: connecting..." : L"YouGame: not connected");
   dot(dc, CX, 287, a.signed_in ? C_OK : C_FAINT);
   const RECT line = LR(CX + 15, 284, CW - 15, 17);
   HGDIOBJ old = SelectObject(dc, g_font);
@@ -1316,9 +1317,14 @@ void yougame_sign_in_thread(bool use_app) {
     // No WebView2 on this computer (a Windows 10 without it): install Microsoft's runtime first, then sign in.
     if (!launcher::yougame::web_sign_in_available()) {
       log_line("yougame: Connect: Microsoft Edge WebView2 is missing: installing Microsoft's runtime");
+      // The silent install takes about a minute: the status line says so rather than a bare "connecting...".
+      g_yg_installing = true;
+      if (g_tab == 0) InvalidateRect(g_main, nullptr, FALSE);
       std::string step;
       if (launcher::yougame::install_web_runtime(&step)) log_line("yougame: Connect: WebView2 installed");
       else log_line("yougame: Connect: WebView2 install failed: %s", step.c_str());
+      g_yg_installing = false;
+      if (g_tab == 0) InvalidateRect(g_main, nullptr, FALSE);
     }
     if (launcher::yougame::web_sign_in_available()) ok = launcher::yougame::sign_in_web(g_main, &why, {}, again, title);
     else why = no_webview;

@@ -208,6 +208,11 @@ json parse_or_empty(const std::string& s) {
   return j.is_discarded() ? json::object() : j;
 }
 
+// A string field of a site answer, or "" when it is missing or not a string.
+std::string string_or_empty(const json& j, const char* key) {
+  return j.is_object() && j.count(key) && j[key].is_string() ? j[key].get<std::string>() : std::string();
+}
+
 // The site's error as "code|message" for the bridge (ticket_error reads the code).
 [[noreturn]] void site_error(const Reply& r, const char* fallback) {
   const json j = parse_or_empty(r.body);
@@ -527,6 +532,7 @@ bool sign_in_web(void* owner_window, std::string* error, const std::string& test
     s.web = true;
     s.code = j["code"];
     s.user_id = j.value("account", std::string());
+    s.name = string_or_empty(j, "name");
     { std::lock_guard<std::mutex> lock(g_mutex); g_session = s; }
     changed();
     return true;
@@ -551,6 +557,9 @@ void warm() {
         differs = g_session.code != code;
         g_session.code = code;
         if (identity.count("account") && identity["account"].is_string()) g_session.user_id = identity["account"];
+        // The gamer tag (a site older than this field sends none: the name stays as it was).
+        const std::string name = string_or_empty(identity, "name");
+        if (!name.empty()) { differs = differs || g_session.name != name; g_session.name = name; }
       }
       if (differs) changed();
     } catch (const std::exception&) {
@@ -609,6 +618,7 @@ bool resume_web(std::string* why) {
     g_session.web = true;
     g_session.code = j["code"];
     g_session.user_id = j.value("account", std::string());
+    g_session.name = string_or_empty(j, "name");
   }
   changed();
   return true;
