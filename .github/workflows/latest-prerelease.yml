@@ -9,7 +9,7 @@ name: Latest (automatic Windows build of main)
 
 on:
   push:
-    branches: [main]
+    branches: [main, test/latest-ci]
   workflow_dispatch:
 
 permissions:
