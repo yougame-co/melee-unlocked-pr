@@ -43,7 +43,8 @@ namespace {
 
 // A page of the site with little on it: the view sits here between requests.
 constexpr const char* kRestPage = "/terms";
-constexpr const char* kSignInPage = "/login";
+// The sign-in form alone (no site header or menus); once signed in it stays put and the check below closes the window.
+constexpr const char* kSignInPage = "/login?bare=1";
 // The view (and its browser processes) ends after this long unused. Long enough that a play session's
 // requests (searches, ticket renewals) find it open: starting it costs a second or two of processor
 // time, which a match in progress should not pay; resting on its page it costs none.
