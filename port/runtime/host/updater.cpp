@@ -548,11 +548,19 @@ void check(const std::string& current_version, bool install_experimental) {
     nlohmann::json list;
     for (int failures = 0;;) {
       body.clear(); status = 0;
-      const bool answered = http_get(REPO_API, &body, &status) && status == 200;
+      bool answered = http_get(REPO_API, &body, &status) && status == 200;
       const unsigned long error = GetLastError();
+      if (!answered) {
+        std::string feed; int feed_status = 0;
+        if (http_get(kReleasesFeed, &feed, &feed_status) && feed_status == 200 && !(body = releases_from_feed(feed)).empty()) {
+          host::log("updater: GET %s failed, HTTP %d: the newest releases come from the releases feed instead", REPO_API, status);
+          from_feed = answered = true;
+        }
+      }
       if (answered) {
         list = nlohmann::json::parse(body, nullptr, false);
         if (list.is_array()) break;
+        from_feed = false;
       }
       std::string feed; int feed_status = 0;
       std::string from_feed_body;
