@@ -652,17 +652,31 @@ void yougame_line() {
   ImGui::SameLine();
   if (a.signed_in) {
     if (ImGui::SmallButton("Disconnect##yg")) launcher::yougame::sign_out();
-  } else if (ImGui::SmallButton("Connect##yg")) {
-    ImGui::OpenPopup("Connect YouGame");
+  } else if (ImGui::SmallButton("Connect##yg") && !g_yg_busy.exchange(true)) {
+    // Linux signs in through the YouGame app (its channel in the session's runtime folder): the launcher
+    // takes the account the app is signed in with, starting the app in its tray when it is installed.
+    // Seimy's report 11-22: Connect did nothing on Linux.
+    { std::lock_guard<std::mutex> lock(g_yg_mutex); g_yg_status = "Asking the YouGame app..."; }
+    std::thread([] {
+      std::string detail;
+      const auto result = launcher::yougame::sign_in_app(true, MELEE_PORT_VERSION, &detail);
+      std::string text;
+      switch (result) {
+        case launcher::yougame::AppSignIn::kSignedIn: text = "Connected through the YouGame app."; break;
+        case launcher::yougame::AppSignIn::kSignedOut: text = "The YouGame app is open but not signed in: sign in there, then press Connect again."; break;
+        case launcher::yougame::AppSignIn::kNoApp: text = "Install the YouGame app for Linux and sign in there, then press Connect again (Open YouGame has the download)."; break;
+        default: text = "The YouGame app did not answer (" + detail + "). Start it, sign in, then press Connect again."; break;
+      }
+      std::fprintf(stderr, "yougame: Connect through the app: %s\n", detail.c_str());
+      { std::lock_guard<std::mutex> lock(g_yg_mutex); g_yg_status = text; }
+      g_yg_busy.store(false);
+    }).detach();
   }
   ImGui::SameLine();
   if (ImGui::SmallButton("Open YouGame")) open_path(launcher::yougame::game_page());
-  if (ImGui::BeginPopupModal("Connect YouGame", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    // The only YouGame sign-in is YouGame's own page in a browser view the launcher owns (Windows today;
-    // here that will be a WebKitGTK view). Until it is built there is nothing to sign in with on Linux.
-    ImGui::TextUnformatted("Signing in to YouGame from this launcher is not on Linux yet.");
-    if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
+  {
+    std::lock_guard<std::mutex> lock(g_yg_mutex);
+    if (!g_yg_status.empty() && !a.signed_in) ImGui::TextWrapped("%s", g_yg_status.c_str());
   }
   if (g_yg_save.exchange(false)) save_ini();
 }

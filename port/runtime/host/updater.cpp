@@ -31,6 +31,10 @@
 #define STBI_NO_STDIO
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
+// Not in the Linux build's Windows stand-in headers (the Windows half of this file is compiled there too).
+#ifndef CREATE_BREAKAWAY_FROM_JOB
+#define CREATE_BREAKAWAY_FROM_JOB 0x01000000
+#endif
 
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "bcrypt.lib")
@@ -836,14 +840,32 @@ std::string install_script(const std::string& batch_dir, unsigned long self, con
   b << "@echo off\r\nsetlocal DisableDelayedExpansion\r\nchcp 65001 >nul\r\ncd /d \"" << batch_dir << "\" || exit /b 1\r\n"
     << "set LOG=\"" << batch_dir << "\\update.log\"\r\n"
     << "echo update started %DATE% %TIME%> %LOG%\r\n"
-    << ":wait\r\ntasklist /FI \"PID eq " << self << "\" 2>nul | find \"" << self << "\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n"
-    << ":waitgame\r\n";
+    << "set WAITS=0\r\n";
+  // Each wait has an end. A launcher or game from this folder that hung on its way out (no window,
+  // still running) used to hold the script here forever: the update never copied, nothing said so,
+  // and the next start offered the same update again. After the limit the process is ended, and only
+  // when it is still one of ours (an image name starting with "melee", which covers every program in
+  // the release): a number Windows gave to some other program since is left alone.
+  // A second waits with ping when timeout cannot (it refuses to run without a console input).
+  const auto wait_for = [&b](const char* label, unsigned long pid, int seconds, const char* what) {
+    b << ":" << label << "\r\n"
+      << "%SystemRoot%\\System32\\tasklist.exe /FI \"PID eq " << pid << "\" 2>nul | %SystemRoot%\\System32\\find.exe \"" << pid << "\" >nul || goto " << label << "_done\r\n"
+      << "set /a WAITS+=1\r\n"
+      << "if %WAITS% geq " << seconds << " (echo " << what << " " << pid << " had not closed after " << seconds
+      << " s, ending it>> %LOG% & %SystemRoot%\\System32\\taskkill.exe /F /FI \"PID eq " << pid << "\" /FI \"IMAGENAME eq melee*\" >> %LOG% 2>&1"
+      << " & set WAITS=0 & (%SystemRoot%\\System32\\timeout.exe /t 2 /nobreak >nul 2>&1 || %SystemRoot%\\System32\\PING.EXE -n 3 127.0.0.1 >nul) & goto " << label << "_done)\r\n"
+      << "%SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul 2>&1 || %SystemRoot%\\System32\\PING.EXE -n 2 127.0.0.1 >nul\r\n"
+      << "goto " << label << "\r\n"
+      << ":" << label << "_done\r\n"
+      << "set WAITS=0\r\n";
+  };
+  wait_for("wait", self, 30, "the launcher");
   // Source also holds the DLL open. Wait for both engines and other launchers
-  // from this folder, without blocking on games in unrelated installations.
+  // from this folder, without blocking on games in unrelated installations. A game still being
+  // played gets longer to close than a launcher that is already on its way out.
+  int n = 0;
   for (const auto pid : others)
-    if (pid != self)
-      b << "tasklist /FI \"PID eq " << pid << "\" 2>nul | find \"" << pid
-        << "\" >nul && (timeout /t 1 /nobreak >nul & goto waitgame)\r\n";
+    if (pid != self) wait_for(("waitgame" + std::to_string(n++)).c_str(), pid, 60, "a game");
   // The launcher normally unpacks update.zip into update_tmp itself (Wine and Proton have no tar)
   // and leaves update_tmp\unpacked.txt; tar is only the fallback for an older handover.
   b << "if exist update_tmp\\unpacked.txt goto findsrc\r\n"
@@ -1023,7 +1045,11 @@ void download_and_install() {
     STARTUPINFOW si{}; si.cb = sizeof si; PROCESS_INFORMATION pi{};
     // Doubled quotes: cmd strips one layer, and the path contains spaces.
     std::wstring cmd = L"cmd /c \"\"" + bat.wstring() + L"\"\"";
-    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, directory.c_str(), &si, &pi)) {
+    // Outside any job the launcher was started in: a job that ends its processes when it closes ended
+    // the installer together with the launcher. A job that allows no breakaway refuses the flag.
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB, nullptr,
+                        directory.c_str(), &si, &pi) &&
+        !CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, directory.c_str(), &si, &pi)) {
       set_message("Cannot start update installer"); g_state = State::Failed; return;
     }
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread);

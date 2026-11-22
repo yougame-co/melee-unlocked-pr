@@ -45,6 +45,8 @@ inline constexpr Part kParts[] = {
   // connection did at start and on Connect, with why it failed.
   {"launcher.log", true, 256 * 1024},
   {"launcher-yougame.log", true, 256 * 1024},
+  // What the last update did (update.bat writes it beside the launcher): where an update stopped.
+  {"update.log", true, 256 * 1024},
 };
 
 using File = std::pair<std::string, std::vector<uint8_t>>;   // name in the zip, contents

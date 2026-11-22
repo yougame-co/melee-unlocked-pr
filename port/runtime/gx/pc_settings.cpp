@@ -1073,6 +1073,10 @@ static std::string binding_source_label(host::CaptureDevice kind, int action, ui
 
 static std::string binding_label(host::CaptureDevice kind, int index, int action) {
   const uint32_t v = binding_get(kind, index, action);
+  // A HID pad's sticks are read from its own axes, not bound: these rows are only for a box that sends
+  // directions as buttons. "Not bound" there read as a broken stick (B0XX reports 11-22).
+  if (!v && kind == host::CaptureDevice::HidPad && (host::is_stick_action(action) || host::is_cstick_action(action)))
+    return host::is_stick_action(action) ? "Controller's stick" : "Controller's C-stick";
   if (!v && (host::is_trigger_action(action) || host::is_analog_action(action))) {
     // A box's own trigger axis has no source to bind: it always feeds the travel.
     if (kind == host::CaptureDevice::HidPad && host::is_analog_action(action)) return "Device axis";
@@ -11897,6 +11901,9 @@ bool settings_frame(SettingsState& state, RenderOptions& options) {
               const float press_gap = press_w > 0.0f ? press_w + ImGui::GetStyle().ItemSpacing.x : 0.0f;
               if (settings_widgets::Selectable(row, i == waiting || i == hovered, ImGuiSelectableFlags_None, ImVec2(ImGui::GetContentRegionAvail().x - 58.0f - press_gap, 0))) begin_rebind(i);
               if (pressed_now) ImGui::PopStyleColor();
+              if (tab_kind == host::CaptureDevice::HidPad && (host::is_stick_action(i) || host::is_cstick_action(i)) && ImGui::IsItemHovered())
+                ImGui::SetTooltip("This controller's stick is read directly, with no binding needed. Bind this only for a box that\n"
+                                  "sends its directions as buttons. A direction the wrong way round: Box layouts > Invert.");
               if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) unbind(i);
               if (press_w > 0.0f) {
                 ImGui::SameLine();

@@ -6,7 +6,8 @@ include("${PORT}/app/disc_rvz.cmake")
 add_executable(melee_launcher launcher_linux.cpp
   "${PORT}/app/launcher_replay_data.cpp" "${PORT}/app/launcher_lobby_p2p.cpp"
   "${PORT}/runtime/host/updater.cpp" "${COMPAT}/compat.cpp" "${COMPAT}/winhttp_ws.cpp"
-  "${PORT}/app/launcher_yougame.cpp" "${PORT}/third_party/dht/dht.c")
+  "${PORT}/app/launcher_yougame.cpp" "${PORT}/app/launcher_yougame_app.cpp" "${PORT}/runtime/hle/yougame_channel.cpp"
+  "${PORT}/third_party/dht/dht.c")
 set_target_properties(melee_launcher PROPERTIES OUTPUT_NAME MeleeUnlocked)
 add_test(NAME linux_launcher_quick_play
   COMMAND "${Python3_EXECUTABLE}" "${PORT}/tests/linux_launcher_quick_play_test.py" $<TARGET_FILE:melee_launcher>)
