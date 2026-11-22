@@ -2298,7 +2298,7 @@ void load_pc_settings(RenderOptions& options, int& volume) {
   // off, so every later launch booted to an FFA character select that rumbled and turned the picture
   // black and white on X and A. That old key is read as off.
   options.lossless_lag_test = false;
-  options.early_inputs = false;   // a file without the key: off (1.0.2 on)
+  options.early_inputs = true;   // a file without the key: on
 #ifndef MELEE_NO_SLIPPI   // the spectator server is part of the Slippi layer
   options.slippi_spectator = true;   // a file without the key: on, as in Slippi Dolphin
   options.slippi_spectator_port = 51441;
@@ -2451,8 +2451,8 @@ void load_pc_settings(RenderOptions& options, int& volume) {
         options.offline_delay_frames = std::clamp(std::stoi(value), 1, 9);
         offline_delay_frames_seen = true;
       }
-      // early_inputs, the old key saved on by default, is not read (render_options.h).
-      else if (key == "early_inputs2" || key == "early_inputs") { if (key == "early_inputs2") options.early_inputs = value == "1"; }
+      // early_inputs and early_inputs2, older keys (the second saved off for everyone), are not read.
+      else if (key == "early_inputs3" || key == "early_inputs2" || key == "early_inputs") { if (key == "early_inputs3") options.early_inputs = value != "0"; }
       else if (key == "performance") options.performance_overlay = value == "1";
       else if (key == "showfps") { options.show_fps = value == "1"; showfps_seen = true; }
       // showfps_yougame2: builds before 10-31 saved showfps_yougame 1 on every save (the old default),
@@ -5211,7 +5211,7 @@ static bool write_settings_file_impl(const SettingsState& state, const RenderOpt
        << "\nonlinedelayauto " << (slippi::online::config().auto_delay ? 1 : 0)
        << "\noffline_delay " << (options.offline_delay ? 1 : 0)
        << "\noffline_delay_frames " << options.offline_delay_frames
-       << "\nearly_inputs2 " << (options.early_inputs ? 1 : 0)
+       << "\nearly_inputs3 " << (options.early_inputs ? 1 : 0)
        << "\nquickchat " << slippi::online::config().chat
        << "\ndirectpause " << (slippi::online::config().direct_pause ? 1 : 0)
        << "\nportcolour1 " << slippi::online::config().port_colour[0]

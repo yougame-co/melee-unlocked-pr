@@ -19,7 +19,7 @@
 namespace host::early_input {
 namespace {
 
-std::atomic<bool> g_setting{false};   // off by default (render_options.h early_inputs)
+std::atomic<bool> g_setting{true};   // on by default (render_options.h early_inputs)
 std::atomic<bool> g_running{false};
 std::thread g_thread;
 SendFn g_send = nullptr;
