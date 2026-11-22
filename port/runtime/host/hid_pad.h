@@ -56,6 +56,16 @@ uint8_t hid_trigger_value(long logical_min, long logical_max, long raw, int8_t r
 // A stick axis as the reader turns it into the pad's signed value (floored, no deadzone), for tests.
 int8_t hid_axis_signed(long logical_min, long logical_max, long raw, bool flip = false);
 
+// How a stick field's raw bits carry its value. As declared (the default), or, for a device whose
+// descriptor and data disagree, the field's bits as two's complement or as offset binary around the
+// field's middle. A B0XX r2 on firmware v3 read in the bottom-right corner at rest on both sticks and
+// could not bind a stick direction (player report 11-21): its range is not what its data is. Decided
+// per axis from the first report, where a box's stick is at rest: the declared reading unless it is far
+// from the centre and another reading is near it. Frame1 has its own (frame1_stick_encoding).
+constexpr int8_t kStickDeclared = 0, kStickTwos = 1, kStickOffset = 2;
+int8_t hid_stick_value(long logical_min, long logical_max, int bits, unsigned long raw, int8_t encoding, bool flip = false);
+int8_t hid_stick_encoding(long logical_min, long logical_max, int bits, unsigned long rest);
+
 // HayBox in its DInput mode, the firmware of the Frame1 and many other box controllers, describes six
 // 16-bit axes (X, Y, Z, Rz, Rx, Ry), a hat and buttons 1-16, and publishes no name of its own (on a
 // Pico it is just "Pico"), so the descriptor is how it is recognised. Its C-stick is Rx/Ry, its

@@ -104,8 +104,12 @@ inline bool command_payload_valid(uint8_t cmd, const uint8_t* payload, uint32_t 
     case CMD_GET_MATCH_STATE: case CMD_OPEN_LOGIN: case CMD_LOGOUT: case CMD_UPDATE:
     case CMD_GET_ONLINE_STATUS: case CMD_CLEANUP_CONNECTION: case CMD_GET_NEW_SEED:
     case CMD_GET_PLAYER_SETTINGS: case CMD_GET_DELAY: case CMD_GET_RANK:
-    case CMD_FETCH_RANK: case CMD_GET_RANK_VISIBILITY: case CMD_YOUGAME_RANKED:
+    case CMD_FETCH_RANK: case CMD_GET_RANK_VISIBILITY:
     expected = 0; break;
+    // 0xFA is two commands: the online menu's Ranked query (no payload) and the replay viewer's gate
+    // (shim/mu_replay.c CMD_REPLAY_GATE: the next frame, then 0 ask or 1 restore). Refusing the gate's
+    // five bytes left every replay control dead: pause, jumps, fast forward and take over (1.0 report).
+    case CMD_YOUGAME_RANKED: return payload_len == 0 || (payload_len == 5 && payload && payload[4] <= 1);
     // The online menu's upstream query; one byte when the menu reports its pick (slippi_online.cpp).
     case CMD_YOUGAME_MENU: return payload_len == 0 || (payload_len == 1 && payload);
     default: return true;

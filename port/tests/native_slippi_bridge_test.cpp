@@ -82,6 +82,15 @@ int main() {
   CHECK(!command_payload_valid(CMD_LOAD_SAVESTATE, load, 32));
   for (int i = 20; i < 24; ++i) load[i] = 0;  // terminator at the third block
   CHECK(command_payload_valid(CMD_LOAD_SAVESTATE, load, 32));
+
+  // 0xFA carries both the Ranked query (empty) and the replay viewer's gate (frame + phase). The gate
+  // must reach the host, or replay pause, jumps, fast forward and take over do nothing.
+  const uint8_t gate_ask[5] = {0, 0, 1, 0x2C, 0}, gate_restore[5] = {0, 0, 1, 0x2C, 1}, gate_bad[5] = {0, 0, 1, 0x2C, 2};
+  CHECK(command_payload_valid(CMD_YOUGAME_RANKED, nullptr, 0));
+  CHECK(command_payload_valid(CMD_YOUGAME_RANKED, gate_ask, 5));
+  CHECK(command_payload_valid(CMD_YOUGAME_RANKED, gate_restore, 5));
+  CHECK(!command_payload_valid(CMD_YOUGAME_RANKED, gate_bad, 5));
+  CHECK(!command_payload_valid(CMD_YOUGAME_RANKED, gate_ask, 4));
   std::printf("native slippi bridge: ok\n");
   return 0;
 }

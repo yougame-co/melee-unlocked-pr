@@ -2464,6 +2464,9 @@ void Matchmaking::FindMatch(MatchSearchSettings settings) {
     host::log("slippi: matchmaking blocked: Slippi is on %s and this build speaks %s; update Melee Unlocked", latest.c_str(), SLIPPI_SEMVER);
     return;
   }
+  // A finished search's thread is still joinable: assigning a new one over it is std::terminate. Callers
+  // replace a used client, but never end the process for it here either.
+  if (thread_.joinable() && thread_.get_id() != std::this_thread::get_id()) thread_.join();
   state_ = INITIALIZING;
   host::log("slippi: matchmaking started (mode %d, code '%s')", settings.mode, settings.connect_code.c_str());
   thread_ = std::thread(&Matchmaking::MatchmakeThread, this);

@@ -667,7 +667,36 @@ void check_frame1_xinput() {
   }
 }
 
+// A stick field whose data disagrees with its declared range (a B0XX r2 on firmware v3: bottom-right at rest, player
+// report 11-21) is read in the encoding that puts it at the centre at rest; a normal pad keeps its declared reading.
+static void check_stick_encodings() {
+  using namespace host;
+  // Signed range declared, offset-binary data (0x80 at rest): the declared reading is a corner.
+  CHECK(hid_stick_value(-127, 127, 8, 0x80, kStickDeclared) == 127);
+  CHECK(hid_stick_encoding(-127, 127, 8, 0x80) == kStickOffset);
+  CHECK(hid_stick_value(-127, 127, 8, 0x80, kStickOffset) == 0);
+  CHECK(hid_stick_value(-127, 127, 8, 0xFF, kStickOffset) == 127);   // full right
+  CHECK(hid_stick_value(-127, 127, 8, 0x00, kStickOffset) == -127);  // full left, as any 0-255 pad reads it
+  CHECK(hid_stick_value(-127, 127, 8, 0xFF, kStickOffset, true) == -127);   // Y flipped: up is up
+  // Unsigned range declared, two's-complement data (0 at rest).
+  CHECK(hid_stick_encoding(0, 255, 8, 0x00) == kStickTwos);
+  CHECK(hid_stick_value(0, 255, 8, 0x00, kStickTwos) == 0);
+  CHECK(hid_stick_value(0, 255, 8, 0x7F, kStickTwos) >= 126);
+  CHECK(hid_stick_value(0, 255, 8, 0x81, kStickTwos) <= -126);
+  // 16-bit signed declared range with two's-complement data reads as declared once sign-extended.
+  CHECK(hid_stick_value(-32768, 32767, 16, 0xFFFF, kStickTwos) == 0 || hid_stick_value(-32768, 32767, 16, 0xFFFF, kStickTwos) == -1);
+  // Normal pads at rest: as declared.
+  CHECK(hid_stick_encoding(0, 255, 8, 128) == kStickDeclared);
+  CHECK(hid_stick_encoding(0, 65535, 16, 32768) == kStickDeclared);
+  CHECK(hid_stick_encoding(-127, 127, 8, 0) == kStickDeclared);
+  // One axis alone cannot tell a stick held to the side at plug-in (255) from two's complement at rest (-1): the
+  // reader takes another reading only when every stick axis the pad has agrees on it (hid_pad.cpp).
+  CHECK(hid_stick_encoding(0, 255, 8, 255) == kStickTwos);
+  CHECK(hid_stick_encoding(0, 255, 8, 200) == kStickDeclared);   // part-way: no other reading is centred
+}
+
 int main() {
+  check_stick_encodings();
   check_frame1_dinput_axes();
   check_frame1_own_dinput();
   check_frame1_xinput();

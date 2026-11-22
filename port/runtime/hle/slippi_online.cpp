@@ -1332,6 +1332,14 @@ bool start_lobby_search() {
   g_last_search = search;
   if (g_plain_opponent_handler) g_plain_opponent_handler(false, nullptr);
   host::cosmetics::freeze_for_online_session();
+  // A client whose last search ended (a refused ticket leaves it in the error state) still holds its
+  // finished search thread: starting another on it ended the process (std::terminate), which is how a
+  // refused Doubles home closed the game (player report 11-22). Replace it, as start_search does.
+  if (g_matchmaking && g_matchmaking->GetMatchmakeState() != Matchmaking::IDLE) {
+    host::log("friends lobby: a new search on a used client (state %d): replaced first", (int)g_matchmaking->GetMatchmakeState());
+    std::lock_guard<std::mutex> lk(g_early_send_mutex);
+    std::thread([mm = std::move(g_matchmaking)]() mutable { mm.reset(); }).detach();
+  }
   if (!g_matchmaking) g_matchmaking = std::make_unique<Matchmaking>(g_user.get());
   g_matchmaking->FindMatch(search);
   update_discord_presence(true);

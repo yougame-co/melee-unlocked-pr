@@ -56,6 +56,7 @@ struct Slot {
   std::array<USHORT, 2> slider_index{};
   int slider_count = 0;
   int8_t f1_enc[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // per axis, from the first report
+  int8_t stick_enc[8] = {-1, -1, -1, -1, -1, -1, -1, -1};   // other pads' stick axes (hid_stick_encoding)
   int8_t f1_trig_enc[2] = {-1, -1};
   std::string name;
   bool ready = false;
@@ -217,6 +218,32 @@ int8_t hid_axis_signed(long logical_min, long logical_max, long raw, bool flip) 
   return to_signed(a, raw, flip);
 }
 
+int8_t hid_stick_value(long logical_min, long logical_max, int bits, unsigned long raw, int8_t encoding, bool flip) {
+  if (bits < 2 || bits > 31) bits = 16;
+  const unsigned long mask = (1ul << bits) - 1, u = raw & mask;
+  const long half = 1l << (bits - 1);
+  if (encoding == kStickTwos) {
+    // The field's bits as a signed number, scaled across the declared range (or the field's own when the
+    // declared range is unsigned).
+    const long s = u >= (unsigned long)half ? (long)u - (half << 1) : (long)u;
+    if (logical_min < 0) return hid_axis_signed(logical_min, logical_max, s, flip);
+    return hid_axis_signed(-half, half - 1, s, flip);
+  }
+  if (encoding == kStickOffset) return hid_axis_signed(0, (half << 1) - 1, (long)u, flip);   // centred mid-field
+  return hid_axis_signed(logical_min, logical_max, (long)u, flip);
+}
+
+int8_t hid_stick_encoding(long logical_min, long logical_max, int bits, unsigned long rest) {
+  auto away = [](int v) { return v < 0 ? -v : v; };
+  const int declared = away(hid_stick_value(logical_min, logical_max, bits, rest, kStickDeclared));
+  if (declared <= 64) return kStickDeclared;   // a normal pad (or a stick held at plug-in): as declared
+  const int twos = away(hid_stick_value(logical_min, logical_max, bits, rest, kStickTwos));
+  const int offset = away(hid_stick_value(logical_min, logical_max, bits, rest, kStickOffset));
+  if (twos <= 16 && twos <= offset) return kStickTwos;
+  if (offset <= 16) return kStickOffset;
+  return kStickDeclared;
+}
+
 // Where a trigger axis sits untouched. A real analog trigger rests at one end of its range. A vJoy
 // axis that its feeder never writes rests in the middle, and reading that from the bottom of the
 // range put every shield at half pressed for as long as the device was plugged in. Dolphin binds such
@@ -353,15 +380,35 @@ bool hidpad_raw_input(void* device_handle, const uint8_t* report, uint32_t size,
   // X/Y are the control stick. Which pair carries the C-stick differs between devices, so both of
   // the common choices are accepted: Rx/Ry when present, otherwise Z/Rz, which is what most cheap
   // pads and most vJoy feeder configurations use.
-  if (read_axis(0, value)) pad.stick_x = to_signed(s.axes[0], value);
-  if (read_axis(1, value)) pad.stick_y = to_signed(s.axes[1], value, true);
-  if (s.axes[3].present && s.axes[4].present) {
-    if (read_axis(3, value)) pad.sub_x = to_signed(s.axes[3], value);
-    if (read_axis(4, value)) pad.sub_y = to_signed(s.axes[4], value, true);
-  } else {
-    if (read_axis(2, value)) pad.sub_x = to_signed(s.axes[2], value);
-    if (read_axis(5, value)) pad.sub_y = to_signed(s.axes[5], value, true);
+  // The stick axes this pad uses: X/Y, then Rx/Ry when present, otherwise Z/Rz.
+  const bool rxry = s.axes[3].present && s.axes[4].present;
+  const int used[4] = {0, 1, rxry ? 3 : 2, rxry ? 4 : 5};
+  // Their encoding, decided once from the first report (hid_stick_encoding), for all of them together: another
+  // reading only when every stick axis the pad has is off-centre as declared and centred in that same reading,
+  // as a box whose descriptor and data disagree reads at rest. One stick held at plug-in keeps the declared reading.
+  if (s.stick_enc[0] < 0) {
+    int8_t agreed = -1; int seen = 0; bool same = true;
+    for (const int i : used) {
+      LONG rest = 0;
+      if (!read_axis(i, rest)) continue;
+      const int8_t e = hid_stick_encoding(s.axes[i].logical_min, s.axes[i].logical_max, s.axes[i].bits, (unsigned long)rest);
+      if (seen++ == 0) agreed = e; else if (e != agreed) same = false;
+    }
+    const int8_t chosen = seen >= 2 && same && agreed > kStickDeclared ? agreed : kStickDeclared;
+    for (int i = 0; i < 8; ++i) s.stick_enc[i] = chosen;
+    if (chosen != kStickDeclared)
+      host::log("hid pad %d: its sticks read as %s (their declared range puts them off-centre at rest)", index + 1,
+                chosen == kStickTwos ? "two's complement" : "offset binary");
   }
+  auto stick = [&](int i, bool flip) -> int8_t {
+    const Axis& ax = s.axes[i];
+    return s.stick_enc[i] == kStickDeclared ? to_signed(ax, value, flip)
+                                            : hid_stick_value(ax.logical_min, ax.logical_max, ax.bits, (unsigned long)value, s.stick_enc[i], flip);
+  };
+  if (read_axis(used[0], value)) pad.stick_x = stick(used[0], false);
+  if (read_axis(used[1], value)) pad.stick_y = stick(used[1], true);
+  if (read_axis(used[2], value)) pad.sub_x = stick(used[2], false);
+  if (read_axis(used[3], value)) pad.sub_y = stick(used[3], true);
   // Triggers, when the device has spare analog axes for them. A box reports these as buttons
   // instead, which the binding table picks up.
   auto trigger = [&](int i, LONG raw) {
