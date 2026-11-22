@@ -8,6 +8,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <atomic>
 #include <windows.h>
 #include <algorithm>
 #include <array>
@@ -166,6 +167,16 @@ void remove_ram_code_range(uint32_t lo, uint32_t hi) {
   if (g_inline_map.empty()) return;
   for (uint32_t a = lo & ~3u; a < hi; a += 4) { const uint32_t off = a - RAM_BASE; if (off < RAM_SIZE) g_inline_map[off / 4] = 0; }
   dispatch_changed(lo, hi);
+}
+
+static std::atomic<uint32_t> g_hook_code_lo{0}, g_hook_code_hi{0};
+void set_hook_code_range(uint32_t lo, uint32_t hi) {
+  g_hook_code_hi.store(0, std::memory_order_relaxed);
+  g_hook_code_lo.store(lo, std::memory_order_relaxed);
+  g_hook_code_hi.store(hi, std::memory_order_relaxed);
+}
+bool in_hook_code_range(uint32_t addr) {
+  return addr >= g_hook_code_lo.load(std::memory_order_relaxed) && addr < g_hook_code_hi.load(std::memory_order_relaxed);
 }
 
 bool runs_from_ram(uint32_t addr) {

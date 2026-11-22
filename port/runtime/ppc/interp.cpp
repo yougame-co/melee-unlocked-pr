@@ -162,6 +162,14 @@ struct Interp {
       if (h[0] || h[1]) host::log("  interpreter jump %08X (%s) -> %08X (%s)", h[0], host::symbol_name(h[0]), h[1], host::symbol_name(h[1]));
     }
   }
+  // Slippi's code table (set_hook_code_range): an interpreter that branches into one of its caves keeps
+  // going in RAM itself. The cave's compiled copy ends with a branch back into the hooked function, which
+  // goes through that function's mid-function thunk; with the function running from RAM (a player's code
+  // wrote into it) the thunk starts one more interpreter whose return address is wherever LR pointed, so
+  // it never stops where the function returns. One player's Event match (the Develop Mode C Stick code
+  // writes into Fighter_Spaghetti_8006AD10, where UCF's pad buffer hook is too; crash report 11-21) left
+  // three interpreters behind per fighter per frame until the 1 MB stack ran out (C00000FD in ~20 s).
+  static bool hook_code(uint32_t t) { return in_hook_code_range(t); }
   // Control transfer to `t` after the link register has been set as the instruction requires.
   // Host functions are called and then execution resumes at LR (what their blr would do).
   void transfer(uint32_t t, bool linked) {
@@ -173,7 +181,7 @@ struct Interp {
       // A compiled callee may restore LR into redirected RAM as well. Check every
       // tail continuation, otherwise its dispatch thunk starts another interpreter
       // and repeated returns consume the host stack.
-      if (runs_from_ram(t)) { pc = t; return; }
+      if (runs_from_ram(t) || hook_code(t)) { pc = t; return; }
       if (Fn fn = lookup(t)) {
         if (++c.call_depth > 20000) fatal(c, "guest call depth exceeded", t);
         { CallDepthScope scope{c}; fn(c, m); }   // released on exception unwinds too

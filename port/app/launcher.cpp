@@ -1081,7 +1081,7 @@ void paint_play(HDC dc) {
     const int on = g_engine == ENGINE_SOURCE && installed ? (g_vanilla.vanilla && vanilla_supported() ? 2 : 0) : 1;
     const std::wstring vanilla_name = launcher::lang::txw(L"Vanilla");
     const bool recomp = recomp_available();
-    const wchar_t* names[kBuildSegments] = {installed ? L"Source Port (Beta)" : L"Source Port (not installed)",
+    const wchar_t* names[kBuildSegments] = {installed ? L"Source Port" : L"Source Port (not installed)",
                                             recomp ? L"Static Recomp (Legacy)" : L"Static Recomp (not installed)", vanilla_name.c_str()};
     for (int i = 0; i < kBuildSegments; ++i) {
       const RECT r = build_seg_rect(i);

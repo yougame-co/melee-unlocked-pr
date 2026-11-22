@@ -11,6 +11,7 @@
 #include <winhttp.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -506,6 +507,62 @@ bool unpack_tar_gz(const std::filesystem::path& archive, const std::filesystem::
 // github.com itself has no such limit: its ten newest releases, turned into the API's shape with this
 // platform's download at its usual address (no size or digest: the API alone lists those).
 constexpr const char* kReleasesFeed = "https://github.com/hero88go/melee-unlocked/releases.atom";
+// &lt; &gt; &quot; &apos; &amp; and &#NN; (ASCII) back to their characters; anything else stays as written.
+std::string unescape_entities(const std::string& s) {
+  static const std::pair<const char*, char> kNamed[] = {{"&lt;", '<'}, {"&gt;", '>'}, {"&quot;", '"'}, {"&apos;", '\''}, {"&amp;", '&'}};
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size();) {
+    if (s[i] == '&') {
+      bool done = false;
+      for (const auto& [name, c] : kNamed)
+        if (s.compare(i, std::strlen(name), name) == 0) { out += c; i += std::strlen(name); done = true; break; }
+      if (!done && i + 3 < s.size() && s[i + 1] == '#') {
+        const size_t semi = s.find(';', i);
+        if (semi != std::string::npos && semi - i <= 6) {
+          const int code = std::atoi(s.c_str() + i + 2);
+          if (code > 0 && code < 128) { out += (char)code; i = semi + 1; done = true; }
+        }
+      }
+      if (done) continue;
+    }
+    out += s[i++];
+  }
+  return out;
+}
+// The feed's notes are the release page's HTML (escaped once more for the feed). What's new reads the API's
+// Markdown, so this turns them back into those lines: "## " headings, "- " list items, plain paragraphs. The
+// feed alone used to come with no notes, so a player whose check fell back to it saw "(no notes)" for every
+// release (player report 11-21).
+std::string notes_from_feed_html(const std::string& escaped) {
+  const std::string html = unescape_entities(escaped);
+  std::string text;
+  for (size_t i = 0; i < html.size();) {
+    if (html[i] != '<') { text += html[i++]; continue; }
+    const size_t close = html.find('>', i);
+    if (close == std::string::npos) break;
+    std::string tag = html.substr(i + 1, close - i - 1);
+    i = close + 1;
+    const bool closing = !tag.empty() && tag[0] == '/';
+    if (closing) tag.erase(0, 1);
+    std::string name = tag.substr(0, tag.find_first_of(" \t/"));
+    for (char& c : name) c = (char)std::tolower((unsigned char)c);
+    const bool heading = name.size() == 2 && name[0] == 'h' && name[1] >= '1' && name[1] <= '6';
+    if (!closing && heading) { if (!text.empty() && text.back() != '\n') text += '\n'; text += "## "; }
+    else if (!closing && name == "li") { if (!text.empty() && text.back() != '\n') text += '\n'; text += "- "; }
+    else if (name == "br" || (closing && (heading || name == "p" || name == "li" || name == "ul" || name == "ol"))) text += '\n';
+  }
+  text = unescape_entities(text);
+  std::string out;   // at most one empty line in a row
+  for (char c : text) {
+    if (c == '\r') continue;
+    if (c == '\n' && out.size() >= 2 && out[out.size() - 1] == '\n' && out[out.size() - 2] == '\n') continue;
+    out += c;
+  }
+  while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
+  while (!out.empty() && out.front() == '\n') out.erase(0, 1);
+  return out;
+}
 std::string releases_from_feed(const std::string& feed) {
   nlohmann::json list = nlohmann::json::array();
   const std::string marker = "/releases/tag/";
@@ -522,14 +579,21 @@ std::string releases_from_feed(const std::string& feed) {
     std::string updated;
     const size_t u = entry.find("<updated>");
     if (u != std::string::npos) updated = entry.substr(u + 9, 20);
+    std::string notes;
+    const size_t c = entry.find("<content");
+    const size_t c_open = c == std::string::npos ? c : entry.find('>', c);
+    const size_t c_end = c_open == std::string::npos ? c_open : entry.find("</content>", c_open);
+    if (c_end != std::string::npos) notes = notes_from_feed_html(entry.substr(c_open + 1, c_end - c_open - 1));
     const std::string name = "MeleeUnlocked-" + tag.substr(1) + kPlatformAsset;
-    list.push_back({{"tag_name", tag}, {"published_at", updated}, {"body", ""},
+    list.push_back({{"tag_name", tag}, {"published_at", updated}, {"body", notes},
                     {"assets", nlohmann::json::array({{{"name", name},
                         {"browser_download_url", "https://github.com/Hero88go/melee-unlocked/releases/download/" + tag + "/" + name}}})}});
   }
   return list.empty() ? std::string() : list.dump();
 }
 }  // namespace
+
+std::string releases_from_feed_for_test(const std::string& feed) { return releases_from_feed(feed); }
 
 void check(const std::string& current_version, bool install_experimental) {
   join();

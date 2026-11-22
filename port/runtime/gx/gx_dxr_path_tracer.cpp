@@ -1,8 +1,11 @@
 // D3D12 DXR one-bounce diffuse path tracer.
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "gx_dxr_path_tracer.h"
+#include "gx_dxr_guard.h"
+#include "test_env.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -178,9 +181,10 @@ bool DxrPathTracer::create_shader_pipeline(const void* dxil, size_t dxil_size,
   state_desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
   state_desc.NumSubobjects = (UINT)std::size(subobjects);
   state_desc.pSubobjects = subobjects;
-  hr = device_->CreateStateObject(&state_desc, IID_PPV_ARGS(&state_));
+  hr = dxr_guarded_create_state_object(device_.Get(), &state_desc, state_.ReleaseAndGetAddressOf());
   if (FAILED(hr)) {
-    if (error) *error = "DXR state-object creation failed (" + std::to_string((uint32_t)hr) + ")";
+    if (error) *error = hr == E_ABORT ? std::string("the graphics driver faulted while it built the ray tracing pipeline")
+                                      : "DXR state-object creation failed (" + std::to_string((uint32_t)hr) + ")";
     root_.Reset();
     return false;
   }
@@ -340,6 +344,11 @@ ID3D12Resource* DxrPathTracer::normal_roughness(unsigned slot) const {
 }
 ID3D12Resource* DxrPathTracer::specular_albedo(unsigned slot) const {
   return slot < kFrameSlots ? targets_[slot].specular_albedo.Get() : nullptr;
+}
+
+bool dxr_test_fault() {
+  const char* t = host::test_env::getenv("MELEE_TEST_DXR_FAULT");
+  return t && std::atoi(t) == 1;
 }
 
 }  // namespace gx

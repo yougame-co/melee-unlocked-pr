@@ -571,6 +571,8 @@ void prepare_gct_load(const uint8_t* payload) {
   // made for the other address, so none of them may run: Slippi's code runs from the table in RAM
   // (interpreted), and the game functions it hooks follow the hooks written into RAM.
   if (host::mod_disc_active()) ppc::add_ram_code_range(g_gct_address, g_gct_address + (uint32_t)gecko::slippi_gct_size);
+  // Its caves, reached from a function that runs from RAM, are followed in that interpreter (ppc.h).
+  ppc::set_hook_code_range(g_gct_address, g_gct_address + (uint32_t)gecko::slippi_gct_size);
   if (host::mod_disc_active() && gecko::gct_base_used && gecko::gct_base_used != g_gct_address) {
     const uint32_t lo = std::min(gecko::gct_base_used, g_gct_address);
     const uint32_t hi = std::max(gecko::gct_base_used, g_gct_address) + (uint32_t)gecko::slippi_gct_size + 0x1000;

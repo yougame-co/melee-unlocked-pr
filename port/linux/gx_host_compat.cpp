@@ -51,6 +51,9 @@ void current_scene(uint32_t* major, uint32_t* minor, uint32_t* match_frame) {
 }
 uint32_t retrace_count() { return linux_host::counters().retraces; }
 void input_last_pads(PadState out[4]) { std::memset(out, 0, sizeof(PadState) * 4); }
+// The lag test ledger (MELEE_LAGTEST_FLASH) is a Windows adapter test (host.cpp): never on here.
+int lagtest_flash_mode() { return 0; }
+int lagtest_flash_report_fill(double* since) { if (since) *since = 0.0; return -1; }
 } // namespace host
 
 namespace ppc {

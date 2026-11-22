@@ -28,10 +28,9 @@ static int tournament_offered; /* hello.tournament availability, refreshed by th
  * then Slippi's own five. The labels say the service: "YouGame Ranked", "Slippi Ranked" (mu_online_pages.h). */
 static const int mu_online_top_rows[] = {
     MU_SLP_MODE_RANKED, MU_SLP_MODE_UNRANKED, MU_SLP_OPT_FRIENDS,
-    /* No YouGame Doubles row in 0.9.990 (owner 11-18): YouGame's server has native Doubles switched off
-     * ("Console Doubles is not available yet"). Doubles stays built in (the pool key carries it); define
-     * MU_SHOW_YOUGAME_DOUBLES to bring the row back. */
-#if defined(MELEE_DOUBLES) && defined(MU_SHOW_YOUGAME_DOUBLES)
+    /* YouGame Doubles is back (11-21: YouGame says it is ready). 0.9.990 left the row out while
+     * YouGame's server had native Doubles off. */
+#if defined(MELEE_DOUBLES)
     MU_SLP_OPT_DOUBLES,
 #endif
 #if MU_SQUAD

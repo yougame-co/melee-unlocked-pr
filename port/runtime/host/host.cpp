@@ -3323,6 +3323,27 @@ bool latency_trace_enabled() {
 }
 static TickTiming g_tick_timing;
 TickTiming& tick_timing() { return g_tick_timing; }
+int lagtest_flash_mode() {
+  static const int mode = [] {
+    const char* v = std::getenv("MELEE_LAGTEST_FLASH");
+    const int m = !v ? 0 : !std::strcmp(v, "report") ? 1 : !std::strcmp(v, "tick") ? 2 : 0;
+    if (m) log("lag test ledger: the picture turns white on X and black on A %s", m == 1 ? "when the adapter's report arrives (past the game)" : "on the frame of the tick that read it");
+    return m;
+  }();
+  return mode;
+}
+static std::atomic<int> g_lagtest_fill{-1};
+static std::atomic<double> g_lagtest_since{0.0};
+void lagtest_flash_report(int fill) {
+  if (g_lagtest_fill.load(std::memory_order_relaxed) == fill) return;
+  g_lagtest_since.store(now_seconds(), std::memory_order_relaxed);
+  g_lagtest_fill.store(fill, std::memory_order_release);
+}
+int lagtest_flash_report_fill(double* since) {
+  const int fill = g_lagtest_fill.load(std::memory_order_acquire);
+  if (since) *since = g_lagtest_since.load(std::memory_order_relaxed);
+  return fill;
+}
 
 // Simulation-thread cost accounting: HLE entry points add their time to a slot; at the next
 // retrace the frame's wall time (including in-frame waits) is logged when it exceeds 20 ms, with the

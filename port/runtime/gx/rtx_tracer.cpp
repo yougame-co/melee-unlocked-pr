@@ -1,6 +1,7 @@
 // The path tracer's ray-traced passes (rtx_tracer.h).
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "rtx_tracer.h"
+#include "gx_dxr_guard.h"
 
 #include "rtx_scene.h"
 
@@ -193,10 +194,11 @@ bool RtxTracer::initialize(ID3D12Device5* device, const std::wstring& exe_dir, s
   state_desc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
   state_desc.NumSubobjects = (UINT)std::size(subobjects);
   state_desc.pSubobjects = subobjects;
-  hr = device_->CreateStateObject(&state_desc, IID_PPV_ARGS(&state_));
+  hr = dxr_guarded_create_state_object(device_.Get(), &state_desc, state_.ReleaseAndGetAddressOf());
   if (FAILED(hr)) {
     root_.Reset();
-    if (error) *error = "trace state object creation failed (" + std::to_string((uint32_t)hr) + ")";
+    if (error) *error = hr == E_ABORT ? std::string("the graphics driver faulted while it built the ray tracing pipeline")
+                                      : "trace state object creation failed (" + std::to_string((uint32_t)hr) + ")";
     return false;
   }
   ComPtr<ID3D12StateObjectProperties> properties;

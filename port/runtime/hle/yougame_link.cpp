@@ -1777,6 +1777,14 @@ transport::RoomIO room_io(Room& r) {
     const bool none = m.count("void") && m["void"].is_boolean() && m["void"].get<bool>();
     host::log("yougame: ranked set result: %s, %s", ranked::str(m, "disposition").c_str(),
               none ? "no winner" : won ? "this player won" : "the opponent won");
+    // Whether YouGame rated the set, and its reason when it did not ("Room marked this set unrated" on screen
+    // for any reason but pack or void): the player report 11-21 had three unrated sets and no reason anywhere.
+    if (m.count("ratingDisposition") && m["ratingDisposition"].is_object()) {
+      const json& d = m["ratingDisposition"];
+      const bool rated = d.count("rated") && d["rated"].is_boolean() && d["rated"].get<bool>();
+      host::log("yougame: ranked set %s%s%s", rated ? "rated" : "unrated by the room",
+                rated ? "" : ", reason ", rated ? "" : ranked::log_text(ranked::str(d, "reason"), 48).c_str());
+    }
     if (g_rank.result(m, r.set.local_participant())) host::log("yougame: ranked standing: %s", g_rank.header().c_str());
     // No standing in the final (unrated, or no ratings for this seat): the CSS read it before the room
     // recorded the set, so the rank line reads it again now.

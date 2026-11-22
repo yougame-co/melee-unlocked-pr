@@ -123,4 +123,6 @@ void fsr_download(const std::string& game_dir_utf8);
 ModelState fsr_state(const std::string& game_dir_utf8);
 std::string fsr_message();
 constexpr const char* kFsrSize = "about 160 MB";
+// The releases feed turned into the API's list (the fallback when the API refuses), for the updater test.
+std::string releases_from_feed_for_test(const std::string& feed);
 }  // namespace host::updater

@@ -622,14 +622,19 @@ int mu_slippi_css_inputs(unsigned int trigger)
         static u32 arena_seen;
         int test_room = 0, in_room = 0;
         const u32 pairing = arena_pairing(&test_room, &in_room);
+        /* Only a player still to lock in can be sent to pick: one who locked in with the search
+         * (Direct's code entry) already has a stage in the match setup, and a loser's mark would
+         * send them to a stage select whose lock-in starts a new search. */
         if (pairing != 0 && pairing != arena_seen) {
             arena_seen = pairing;
-            st->is_winner = m->local_index == 0 ? MU_SLP_WINNER_LOST : MU_SLP_WINNER_WON;
-            st->chose_stage = 0;
+            if (m->local_ready == 0) {
+                st->is_winner = m->local_index == 0 ? MU_SLP_WINNER_LOST : MU_SLP_WINNER_WON;
+                st->chose_stage = 0;
+            }
             OSReport("arena: new pairing %u, local index %d, %s the first stage\n", (unsigned) pairing, (int) m->local_index,
-                     m->local_index == 0 ? "picks" : "waits for");
+                     m->local_ready != 0 ? "already locked in for" : m->local_index == 0 ? "picks" : "waits for");
         }
-        if (in_room && st->is_winner == MU_SLP_WINNER_NULL) {
+        if (in_room && st->is_winner == MU_SLP_WINNER_NULL && m->local_ready == 0) {
             /* In a room nobody may be left with neither winner nor loser: Start would do nothing
              * (the console stalls). Decided as a new pairing is. */
             st->is_winner = m->local_index == 0 ? MU_SLP_WINNER_LOST : MU_SLP_WINNER_WON;

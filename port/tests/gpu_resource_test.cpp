@@ -42,6 +42,7 @@ namespace gx { void set_hud_scales(int, int, bool) {} void set_low_poly_fighters
 namespace gecko { bool option_pal_stock_icons = false; }
 namespace yougame { bool embedded() { return false; } bool embed_toplevel() { return false; } }
 namespace host { void startup_first_frame() {} }   // the renderer asks; never embedded in this test
+namespace host { int lagtest_flash_mode() { return 0; } int lagtest_flash_report_fill(double* since) { if (since) *since = 0; return -1; } }   // lag test ledger off
 // This renderer regression test deliberately links the production D3D12 backend without Media
 // Foundation. Keep its video-background hooks inert so it exercises descriptor/upload behavior.
 namespace gx::video_bg {

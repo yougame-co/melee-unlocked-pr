@@ -50,6 +50,16 @@ std::atomic<int> g_presented_fill{-1};
 int latency_test_fill() {
   static int fill = -1;
   static uint16_t held_before = 0;
+  if (host::lagtest_flash_mode() == 2) {
+    // Lag test ledger, "tick": the pads this tick read decide this tick's frame. X white, A black.
+    static int flash = -1;
+    host::PadState now[4]{};
+    host::input_last_pads(now);
+    uint16_t down = 0;
+    for (const host::PadState& pad : now) down |= pad.button;
+    if (down & 0x0400) flash = 1; else if (down & 0x0100) flash = 0;
+    return flash;
+  }
   if (!g_latency_test.load(std::memory_order_relaxed)) { fill = -1; held_before = 0; return -1; }
   host::PadState pads[4]{};
   host::input_last_pads(pads);

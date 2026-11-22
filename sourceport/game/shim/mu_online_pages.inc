@@ -479,7 +479,7 @@ static const char* pages_row_words(int option)
     /* Over the local channel (split_friends) Friends is the app's friend flow, with the app's words. */
     case MU_SLP_OPT_FRIENDS: return split_friends() ? "Invite a friend to play." : "Play a friend by code.";
 #ifdef MELEE_DOUBLES
-    case MU_SLP_OPT_DOUBLES: return "Play 2v2 in the YouGame app.";
+    case MU_SLP_OPT_DOUBLES: return "Play 2v2 with a friend.";   /* the Doubles home opens through the launcher too */
 #endif
 #if MU_SQUAD
     case MU_SLP_OPT_SQUAD: return "Play with 4 fighters each.";

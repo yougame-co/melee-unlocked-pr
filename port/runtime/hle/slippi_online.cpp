@@ -1293,6 +1293,16 @@ void start_find_match(const uint8_t* payload, const std::string& friend_room = {
   if (!enet_ready()) { g_forced_error = "Networking unavailable"; return; }
   host::cosmetics::freeze_for_online_session();
   g_search_started_ms = time_ms();
+  // A client that already searched (it found a match, failed or ended) still holds its search
+  // thread: starting another on it ends the process (std::thread assigned while joinable). The
+  // character select cleans up before every search, but other paths can reach here without that
+  // (an arena room's stage select locked in after its pair was dropped), so replace it here too.
+  if (g_matchmaking && g_matchmaking->GetMatchmakeState() != Matchmaking::IDLE) {
+    host::log("slippi: a new search on a used client (state %d): replaced first", (int)g_matchmaking->GetMatchmakeState());
+    std::lock_guard<std::mutex> lk(g_early_send_mutex);
+    std::thread([mm = std::move(g_matchmaking)]() mutable { mm.reset(); }).detach();
+    g_matchmaking = std::make_unique<Matchmaking>(g_user.get());
+  }
   g_matchmaking->FindMatch(search);
   update_discord_presence(true);
 }

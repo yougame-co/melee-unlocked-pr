@@ -810,8 +810,8 @@ class OnlineMenuTest(unittest.TestCase):
         self.assertIn('Sign in to Slippi to play Direct, Teams and Party', label)
         # Doubles is a YouGame-page row only when built in (no longer an #if 0 block).
         top = re.search(r'mu_online_top_rows\[\] = \{(.*?)\};', header, re.S)[1]
-        # 0.9.990: built in, shown only with MU_SHOW_YOUGAME_DOUBLES (YouGame's server has it off).
-        self.assertIn('#if defined(MELEE_DOUBLES) && defined(MU_SHOW_YOUGAME_DOUBLES)\n    MU_SLP_OPT_DOUBLES,', top)
+        # 1.0 (owner 11-21): the YouGame Doubles row is shown whenever Doubles is built in.
+        self.assertIn('#if defined(MELEE_DOUBLES)\n    MU_SLP_OPT_DOUBLES,', top)
         self.assertNotIn('MU_SLP_OPT_SLIPPI', top)
 
     def test_ranked_description_and_plain_hud_wiring(self):

@@ -65,6 +65,13 @@ struct StageSplitAudit { uint64_t checked = 0, split = 0; float worst = 0; };
 // inside a single tick.
 struct PhaseFlipStats { uint64_t compared = 0, flipped = 0, flipped_skinned = 0; };
 PhaseFlipStats& subframe_phase_flips();
+// Predict overshoot: in the predicting modes a presented frame shows where a draw will be if it
+// keeps this tick's motion. When the next tick shows it reversed or stopped (a dash dance turning,
+// Peach starting a float), the drawn pose would jump back by up to a whole frame of motion in one
+// presented frame. That jump is glided out over half a tick instead. Counts the draws glided and
+// the largest correction, in view-space units.
+struct PredictGlideStats { uint64_t ticks = 0, draws = 0, arrival_ticks = 0; float largest = 0; };
+PredictGlideStats& subframe_predict_glide();
 StageSplitAudit& subframe_stage_split_audit();
 
 class SubFrameSolver {
@@ -98,6 +105,19 @@ class SubFrameSolver {
   // from tick to tick, and alternating is what the eye reads as flicker. Matrix-driven motion
   // (cursors, sliding panels, the rotating background) still gets full sub-frame motion.
   void set_menu_mode(bool on) { menu_mode_ = on; }
+  // Predict glide bookkeeping (PredictGlideStats): what the last build put out counts as shown only
+  // once its present reaches the screen. A present cut short or dropped for a newer frame was never
+  // seen, and gliding from it would move a draw away from where it actually was on screen.
+  void present_shown() const;
+  // A present that showed the current frame exactly as the game drew it (no build): nothing was
+  // ahead of the game on screen, so the next tick has nothing to glide back.
+  void present_as_drawn() const { pending_shown_.clear(); pending_xyz_.clear(); pending_game_.clear(); shown_sequence_ = 0; glide_sequence_ = 0; glide_has_.clear(); }
+  // The new game frame `f`, presented on its arrival before it is paired: when the last presented
+  // frame put a draw beyond where the game had it and the new frame turns it back, `out` gets every
+  // draw's own matrices with that overshoot kept as an offset (true), the start of the same glide a
+  // paired build gives; the builds of this tick that follow fade it. False: nothing to glide, present
+  // the frame as drawn. Needs no pairing: draws are found by identity in what was last shown.
+  bool arrival_glide(const Frame& f, std::vector<DrawMatrices>& out) const;
 
   // Exposed for tests: apply fraction t of the rigid/blended delta between prev and cur 3x4 matrices.
   static void fractional(const float prev[12], const float cur[12], double t, bool interpolate,
@@ -130,6 +150,18 @@ class SubFrameSolver {
   mutable std::vector<uint8_t> last_posed_, routes_;
   std::vector<int> pair_reason_;   // development dump only
   mutable double last_build_phase_ = -1;
+  // Predict overshoot glide (PredictGlideStats): the translations last presented per draw, and the
+  // correction each draw of this tick fades out from.
+  struct ShownDraw { uint64_t identity; uint64_t rows; uint32_t offset; };
+  mutable std::vector<ShownDraw> shown_, pending_shown_;
+  mutable std::vector<float> shown_xyz_, pending_xyz_;
+  mutable std::vector<float> shown_game_, pending_game_;   // beside *_xyz_: the game's own pose of that draw in that tick
+  mutable uint64_t shown_sequence_ = 0, pending_sequence_ = 0, glide_sequence_ = 0;
+  mutable double glide_t0_ = 0;
+  mutable std::vector<float> glide_vec_;      // per draw: the rigid offset (x, y, z) at full strength
+  mutable std::vector<uint8_t> glide_has_;    // per draw: 1 when it glides this tick
+  uint64_t glide_rows(size_t i) const;
+  void predict_glide(double t, std::vector<DrawMatrices>& out) const;
   bool menu_mode_ = false;
   mutable SubFrameStats stats_;
 };

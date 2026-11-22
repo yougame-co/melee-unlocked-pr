@@ -365,7 +365,7 @@ bool cpu_page(Page p) {
 enum class Kind { Page, Toggle, Percent, Number, Choice, Odds, Flag, Action, Info };
 enum Action : int {
   kActNone, kActUnranked, kActCancel, kActWindow, kActDefaults, kActPreset = 100, kActLoad = 200, kActSave = 300, kActGhost = 400,
-  kActTeams = 500, kActBlocked = 600, kActWarmupBack = 650, kActWarmupAdjust = 651,
+  kActTeams = 500, kActBlocked = 600, kActWarmupBack = 650, kActWarmupAdjust = 651, kActGhostOff = 652,
   // "Stronger Pro AI (Requires additional download)": the question after picking a pro, and the
   // Fight a pro page's own download row.
   kActStrongerYes = 700, kActStrongerNotNow, kActStrongerAlways, kActStrongerNever, kActStrongerAll
@@ -766,6 +766,11 @@ std::vector<Row> rows_for(Page p) {
     }
     case Page::Ghosts: {
       const bool neural = neural_ghosts();
+      // A pro is playing: the way back to the game's own CPU, first on the page (player report 11-21: players could
+      // not find how to stop a pro; only CPU > Practice CPU turned it off).
+      if (!active_pro(c).empty())
+        rows.push_back(action_row(("Stop fighting " + active_pro(c)).c_str(), kActGhostOff, "",
+                                  "The CPU goes back to the game's own CPU. Pick a pro again any time."));
       for (int i = 0; i < kGhostCount; ++i) {
         if (!ghost_offered(i, neural)) continue;
         const practice_ghosts::Ghost& gh = practice_ghosts::kGhosts[i];
@@ -1012,6 +1017,15 @@ void press(Page p, Row& r, Result& out) {
     return;
   }
   if (r.action >= kActPreset && r.action < kActPreset + 100) { apply_preset(r.action - kActPreset); return; }
+  if (r.action == kActGhostOff) {
+    const uint8_t tools = g_c.tools;
+    mu_pc_defaults(&g_c);
+    g_c.tools = tools;
+    g_c.preset = 0;
+    g_c.enabled = 0;
+    g_c_changed = true;
+    return;
+  }
   if (r.action >= kActGhost && r.action < kActGhost + 100) {
     const int pro = r.action - kActGhost;
     // Keep Training unchanged until the player answers the download question. Restarting here
@@ -1516,8 +1530,12 @@ void draw_bars(ImDrawList* dl, const Frame& f, std::vector<Row>& rows, float a) 
     const float top = block_top + i * pitch;
     const float l = right - w + an.x + slide, r = right + an.x - 16.0f * u + slide;
     const Row& row = rows[(size_t)index];
-    // Leave room for the value even with a long label; draw_bar scales the label to fit beside it.
-    const std::string shown_value = fit(value_of(row), h * 0.5f * 0.84f, (r - l) * 0.35f);
+    // Leave room for the value even with a long label; draw_bar scales the label to fit beside it. The value takes
+    // what the label leaves (up to 60% of the bar, never under 35%), so "Dash dance" or "Forward throw" shows whole
+    // beside a short label instead of ending in "..." (owner 11-21: the cut values looked bad).
+    const float label_room = (r - l) - 82.0f * u - text_width(h * 0.5f, row.label.c_str());
+    const float value_room = std::max((r - l) * 0.35f, std::min(label_room, (r - l) * 0.60f));
+    const std::string shown_value = fit(value_of(row), h * 0.5f * 0.84f, value_room);
     draw_bar(dl, l, top, r, h, u, lit, row.label.c_str(), shown_value, row.enabled, ba, false);
     g_bar_hits.push_back({index, ImVec2(l, top), ImVec2(r, top + h)});
     if (lit) draw_ring(dl, ImVec2(r - 6.0f * u, top + h * 0.5f), u, t, ba);

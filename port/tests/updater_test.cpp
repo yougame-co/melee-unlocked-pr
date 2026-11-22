@@ -96,6 +96,23 @@ int main(int argc, char** argv) {
   check(!download_matches("abd", abc), "a damaged download of the same size is refused");
   check(download_matches("anything", ""), "a release without a listed digest keeps the size check only");
 
+  // The releases feed (the fallback when GitHub's API refuses the check) carries each release's notes as
+  // escaped HTML; What's new showed "(no notes)" for all of them before (player report 11-21).
+  {
+    const std::string feed =
+        "<feed><entry><link rel=\"alternate\" type=\"text/html\" href=\"https://github.com/Hero88go/melee-unlocked/releases/tag/v0.9.997\"/>"
+        "<updated>2026-11-22T00:22:33Z</updated><content type=\"html\">&lt;h2&gt;Install&lt;/h2&gt;\n&lt;p&gt;Download &lt;code&gt;x.zip&lt;/code&gt;.&lt;/p&gt;\n"
+        "&lt;p&gt;Video &amp;gt; Ray tracing&lt;/p&gt;\n&lt;h2&gt;Fixes&lt;/h2&gt;\n&lt;ul&gt;\n&lt;li&gt;&lt;strong&gt;The Lab view needs Ctrl+F3.&lt;/strong&gt; It&amp;#39;s off.&lt;/li&gt;\n"
+        "&lt;/ul&gt;\n&lt;p&gt;Includes everything from 0.9.996.&lt;/p&gt;</content></entry></feed>";
+    const std::string list = host::updater::releases_from_feed_for_test(feed);
+    check(list.find("\"tag_name\":\"v0.9.997\"") != std::string::npos, "the feed lists its release");
+    // A blank line after a heading, as in the API's Markdown body.
+    check(list.find("## Fixes\\n\\n- The Lab view needs Ctrl+F3. It's off.") != std::string::npos, "the feed's notes become What's new lines");
+    check(list.find("Video > Ray tracing") != std::string::npos, "escaped characters in the feed's notes come back");
+    check(list.find("&lt;") == std::string::npos && list.find("<p>") == std::string::npos, "no HTML is left in the notes");
+    check(list.find("Includes everything from 0.9.996.") != std::string::npos, "the last paragraph is kept");
+  }
+
   std::error_code ec;
   const fs::path root = fs::temp_directory_path() / ("mu-updater-test-" + std::to_string(GetCurrentProcessId()));
   fs::remove_all(root, ec);

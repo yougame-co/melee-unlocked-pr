@@ -313,6 +313,14 @@ double sleep_slack();
 void set_game_rate(double hz);
 double game_rate();
 bool latency_trace_enabled();
+// Lag test ledger (MELEE_LAGTEST_FLASH, tests): where the whole picture turns white (X) or black (A)
+// for a Lossless adapter lag test, to split its reading into parts. 0 off: the game's own path.
+// 1 "report": the moment the adapter's report with the button arrives, past the game entirely (the
+// floor of the adapter, the display and this renderer). 2 "tick": on the frame of the tick whose
+// pad read saw it (adds the wait for the tick, the game's frame and its drawing).
+int lagtest_flash_mode();
+void lagtest_flash_report(int fill);        // adapter reader thread: 1 white, 0 black
+int lagtest_flash_report_fill(double* since = nullptr);   // -1 none yet; *since: when it last changed (now_seconds)
 TickTiming& tick_timing();
 // Per-draw scopes run tens of thousands of times a frame, so they read the CPU time stamp counter
 // (one instruction) instead of QueryPerformanceCounter; tsc_seconds is calibrated once at startup.

@@ -13,6 +13,8 @@ namespace host {
 Options options;
 TickTiming& tick_timing() { static TickTiming timing; return timing; }
 void log(const char*, ...) {}
+int lagtest_flash_mode() { return 0; }   // the lag test ledger (host.cpp): off here
+void lagtest_flash_report(int) {}
 }
 
 int main() {

@@ -395,6 +395,12 @@ void reader_thread() {
       if (got == 37 && buf[0] == 0x21) {
         const auto received = std::chrono::steady_clock::now();
         last_report = received;
+        if (lagtest_flash_mode() == 1) {
+          // Any socket: X white, A black (the lag test holds one, then the other).
+          uint8_t held = 0;
+          for (int port = 0; port < 4; ++port) if (buf[1 + port * 9] & 0x30) held |= buf[2 + port * 9];
+          if (held & 0x04) lagtest_flash_report(1); else if (held & 0x01) lagtest_flash_report(0);
+        }
         if (++reports_in_window == 50) {
           const double seconds = std::chrono::duration<double>(received - poll_window_start).count();
           g_poll_rate_hz.store(seconds > 0.0 ? 50.0 / seconds : 0.0, std::memory_order_relaxed);

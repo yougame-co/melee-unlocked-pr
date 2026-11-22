@@ -119,6 +119,9 @@ endif()
 add_test(NAME port_console_card_agreement COMMAND port_yougame_console_link_test --card-agreement)
 add_test(NAME port_console_room_refusals COMMAND port_yougame_console_link_test --room-refusals)
 add_test(NAME port_yougame_console_latency COMMAND port_yougame_console_link_test --latency)
+# Wall-clock checks (max round trip <= 60 ms): run alone, as tests running beside it on the same cores
+# pushed it over by a millisecond or two (main checks 11-20, 61 ms).
+set_tests_properties(port_yougame_console_latency PROPERTIES RUN_SERIAL TRUE)
 add_test(NAME port_console_watchdog COMMAND port_yougame_console_link_test --watchdog)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_test(NAME port_agent_open_settings_wiring COMMAND "${Python3_EXECUTABLE}" -B

@@ -814,6 +814,14 @@ struct Backend {
   virtual void submit_frame(const Frame& frame, const DrawMatrices* overrides) { (void)overrides; submit_frame(frame); }
   // Drain mode: execute the frame's commands (copies, clears, uploads) but do not blit or present it.
   virtual void set_skip_present(bool) {}
+  // A submit that may be cut short: while `cancel` is set, the renderer polls it between draws and,
+  // once it answers true, records no more of the frame and does not present it (the frame's clears
+  // still run, so the next frame starts from an empty EFB). Only for a repeated present of a frame
+  // already shown once: its texture copies exist from that first present. submit_cancelled() says
+  // whether the last submit ended that way. Renderers that cannot do it never cancel.
+  virtual void set_submit_cancel(const std::function<bool()>*) {}
+  virtual bool submit_cancelled() const { return false; }
+  virtual double submit_cancel_time() const { return 0.0; }   // latency trace: when the last cancel was noticed (now_seconds)
 };
 
 void init(Backend* backend);
@@ -842,6 +850,10 @@ bool active_native_scope_is_skinned();
 // The native game reports draw owners in the command stream (token 0xF1) instead of through the
 // render observer.
 void set_native_owner_source(bool native);
+// Predict ahead glides each fighter back as one piece, so it needs to know which draws are whose:
+// on, draw owners are tracked whatever the looks need (subframe.cpp).
+void set_predict_owners(bool on);
+bool predict_owners();
 NativePoseBridgeStats native_pose_bridge_stats();
 void finish_native_pose_scope(uint32_t scope_id);
 const uint8_t* tmem();

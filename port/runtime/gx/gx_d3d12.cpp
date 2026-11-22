@@ -55,6 +55,7 @@
 #include "gx_dxr_scene.h"
 #include "gx_dxr_gpu_scene.h"
 #include "gx_dxr_path_tracer.h"
+#include "gx_dxr_guard.h"
 #include "rtx_scene.h"
 #ifdef MELEE_REMIX_SPIKE
 #include "remix_bridge.h"
@@ -186,7 +187,7 @@ namespace {
 #endif
 
 // execute_draw section costs (seconds) and draw count since the last profile line.
-double g_prof[12]; uint64_t g_prof_frames = 0; uint64_t g_prof_draws = 0, g_pso_hits = 0, g_pso_lookups = 0, g_pso_creates = 0, g_pso_skips = 0;
+double g_prof[20]; uint64_t g_prof_frames = 0; uint64_t g_prof_draws = 0, g_pso_hits = 0, g_pso_lookups = 0, g_pso_creates = 0, g_pso_skips = 0;
 struct Stopwatch {
   static double now() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
   double t = now(); double lap() { double n = now(), d = n - t; t = n; return d; }
@@ -583,6 +584,12 @@ class D3D12Backend : public Backend {
   int scale() const { return scale_; }
   void set_skip_present(bool skip) override { skip_present_ = skip; }
   bool skip_present_ = false;
+  void set_submit_cancel(const std::function<bool()>* cancel) override { submit_cancel_ = cancel; }
+  bool submit_cancelled() const override { return submit_cancelled_; }
+  double submit_cancel_time() const override { return submit_cancel_time_; }
+  double submit_cancel_time_ = 0.0;
+  const std::function<bool()>* submit_cancel_ = nullptr;
+  bool submit_cancelled_ = false;
   bool occluded_ = false;   // Present said DXGI_STATUS_OCCLUDED: minimized or alt-tabbed out of fullscreen
   uint32_t frames_presented() const { return frames_presented_; }
   uint32_t pipeline_count() const { return (uint32_t)psos_.size(); }
@@ -1373,6 +1380,14 @@ void D3D12Backend::init() {
       g_dxr_path_available.store(false, std::memory_order_relaxed);
       host::log("dxr: path tracing unavailable: %s", dxr_error.c_str());
     }
+  }
+  // The driver faulted while it built a ray tracing pipeline (gx_dxr_guard.h): no more ray tracing setup this
+  // session, so nothing else calls into that driver code. The game draws as it does on a card without it.
+  if (dxr_device_ && dxr_list_ && dxr_driver_faulted()) {
+    host::log("dxr: the graphics driver faulted in its ray tracing setup; ray tracing is off for this session");
+    set_rtx_status(1, "This graphics driver failed while it set up ray tracing. Melee Unlocked is drawing.");
+    g_dxr_path_available.store(false, std::memory_order_relaxed);
+  } else if (dxr_device_ && dxr_list_) {
     std::string rtx_error;
     if (rtx_scene_.initialize(dxr_device_.Get(), exe_dir_, &rtx_error)) host::log("rtx: GPU scene pass initialized");
     else host::log("rtx: GPU scene unavailable: %s", rtx_error.c_str());
@@ -5541,7 +5556,25 @@ void D3D12Backend::log_slow_frame(const Frame& frame, double seconds) {
 }
 
 void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* overrides) {
-  set_presented_test_fill(frame.test_fill);
+  // Lag test ledger (host.h lagtest_flash_mode): "report" fills from the adapter's newest report,
+  // whatever frame this is; "tick" arrives in frame.test_fill. One line per change, with the time
+  // from its cause to the return of the Present that shows it.
+  double flash_since = 0.0;
+  const int flash_mode = host::lagtest_flash_mode();
+  const int flash_fill = flash_mode == 1 ? host::lagtest_flash_report_fill(&flash_since) : flash_mode == 2 ? frame.test_fill : -1;
+  if (flash_mode == 2) flash_since = frame.tick.pad;
+  struct FlashLog {
+    int fill; double since; const bool& shown;
+    ~FlashLog() {
+      static int last = -1; static int lines = 0;
+      if (fill < 0 || fill == last || !shown) return;
+      last = fill;
+      if (lines++ < 2000) host::log("lag test ledger: %s %.2f ms after its cause (Present returned)", fill ? "white" : "black", (host::now_seconds() - since) * 1000.0);
+    }
+  };
+  bool flash_presented = false;
+  FlashLog flash_log{flash_fill, flash_since, flash_presented};
+  set_presented_test_fill(flash_mode == 1 ? flash_fill : frame.test_fill);
   remix_floor_tex_.clear();
   if (remix_layer_) {
     // A reflective stage floor (Pokemon Stadium's field, Dream Land's water) reads the game's copy of
@@ -5553,6 +5586,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
     }
   }
   Stopwatch frame_sw;
+  Stopwatch part_sw;   // the parts of a frame outside its draws, for the "render cost" line
   static const bool startup_diag = std::getenv("MELEE_GPU_STARTUP_DIAG") != nullptr;
   double diag_time = startup_diag ? Stopwatch::now() : 0.0;
   auto diag = [&](const char* part) {
@@ -5675,7 +5709,9 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
   const uint64_t fence_completed = fence_->GetCompletedValue();
   const unsigned frames_queued = fence_value_ > fence_completed ? (unsigned)(fence_value_ - fence_completed) : 0u;
   slot_ = (int)(frame_counter_ % FRAME_SLOTS);
-  wait_fence(slot_fence_[slot_]);   // this slot's previous frame (FRAME_SLOTS frames ago) is complete
+  { Stopwatch fence_sw;
+    wait_fence(slot_fence_[slot_]);   // this slot's previous frame (FRAME_SLOTS frames ago) is complete
+    g_prof[17] += fence_sw.lap(); }
   diag("frame slot fence");
   if (scan_pending_[slot_]) read_flicker_scan();
   if (timer_pending_[slot_]) read_gpu_timers();
@@ -5691,7 +5727,9 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
     gpu_frame_ms_sum_ = 0; gpu_frame_ms_samples_ = 0;
   }
   vertex_ring_.reset(slot_); index_ring_.reset(slot_); constant_ring_.reset(slot_); upload_ring_.reset(slot_);
+  g_prof[12] += part_sw.lap();
   select_frame_geometry(frame);
+  g_prof[13] += part_sw.lap();
   diag("geometry upload fence");
   frame_garbage_[slot_].clear();
   descriptor_garbage_[slot_].clear();
@@ -5866,6 +5904,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
   streamline::pcl_marker(0);
   streamline::pcl_marker(1); streamline::pcl_marker(2);
   if (have_clear_) { clear_efb(pending_clear_); have_clear_ = false; }
+  g_prof[14] += part_sw.lap();
   const EfbCopy* screen = nullptr;
   for (const EfbCopy& copy : frame.copies) if (copy.to_xfb) screen = &copy;
   int fullscreen_slot = -1;
@@ -5887,8 +5926,29 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
       if (frame.commands[i].kind != FrameCommand::Draw && !frame.copies[frame.commands[i].index].to_xfb) end = i + 1;
     return end;
   }();
+  // A repeated present that a newer game frame overtakes (set_submit_cancel) stops here: no more
+  // draws are recorded, no texture copy is taken from the half-drawn EFB (the copies of this frame's
+  // first present stand), the clears still run so the next frame starts empty, and nothing is
+  // presented. What was recorded is executed as usual, so every tracked resource state holds. Only
+  // on the plain path: an upscaler, frame generation, path tracing, the Remix layer and captures keep
+  // per-present history that a dropped present would leave half written.
+  submit_cancelled_ = false;
+  // MELEE_TEST_CUT_WHILE_CAPTURING=1 (tests): presents are cut short during a capture too, so the captured
+  // frames after a cut can be compared with the same game frames drawn without any.
+  static const bool cut_while_capturing = [] { const char* v = host::test_env::getenv("MELEE_TEST_CUT_WHILE_CAPTURING"); return v && *v == '1'; }();
+  bool cancellable = submit_cancel_ && !skip_present_ && screen && screen->clear && !mvec_out() && !opts_.path_tracing &&
+                     !rtx_wanted() && !remix_layer_ && !remix_mode_ && fg_applied_ <= 0 && !fsr_active() && !xess_active() &&
+                     (opts_.capture_path.empty() || cut_while_capturing) && !opts_.flicker_scan && !g_capture_request.load(std::memory_order_relaxed);
   for (size_t command_index = 0; command_index < frame.commands.size(); ++command_index) {
     const FrameCommand& cmd = frame.commands[command_index];
+    if (cancellable && !submit_cancelled_ && (command_index & 7) == 0 && (*submit_cancel_)()) {
+      submit_cancelled_ = true;
+      submit_cancel_time_ = host::now_seconds();
+    }
+    if (submit_cancelled_) {
+      if (cmd.kind != FrameCommand::Draw && frame.copies[cmd.index].clear) clear_efb(frame.copies[cmd.index]);
+      continue;
+    }
     if (cmd.kind == FrameCommand::Draw) {
       if (command_index >= needed_commands) continue;
       const DrawCall& dc = frame.draws[cmd.index];
@@ -5933,6 +5993,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
       if (c.clear) clear_efb(c);
     }
   }
+  part_sw.lap();   // the draws and the present pass have their own counters
   if (timer_heap_) {
     // Frame end: the pair is resolved into the slot's readback after the pass timers (offsets 0 to
     // 3) and read when this slot comes round again, after its fence.
@@ -5948,6 +6009,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
   ID3D12CommandList* lists[] = {list_.Get()};
   queue_->ExecuteCommandLists(1, lists);
   diag("command execution");
+  g_prof[15] += part_sw.lap();
   present_wait_ = 0;
   if (presented) {
     const double wait_start = Stopwatch::now();
@@ -6054,6 +6116,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
     }
     diag("swapchain Present and pacing");
     g_prof[10] += present_sw.lap();
+    flash_presented = true;
     streamline::pcl_marker(5);
     reflex_token_ = false;
     ++frames_presented_;
@@ -6061,6 +6124,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
     streamline::frame_generation_after_present();
     if (frames_presented_ % 600 == 0) streamline::log_frame_generation();
   }
+  part_sw.lap();   // the wait and Present are counted above
   poll_validation();
   // Signal, do not wait: the next frames render while the GPU finishes this one.
   ++fence_value_;
@@ -6115,6 +6179,7 @@ void D3D12Backend::submit_frame(const Frame& frame, const DrawMatrices* override
     }
   }
   pacing_diagnostics_.poll(swapchain_.Get(), hwnd_);
+  g_prof[16] += part_sw.lap();
 }
 
 }  // namespace
@@ -6489,9 +6554,10 @@ std::string d3d12_profile_line() {
            (unsigned long long)g_prof_draws, 1e6 * g_prof[0] / n, 1e6 * g_prof[1] / n, 1e6 * g_prof[2] / n, 1e6 * g_prof[3] / n, 1e6 * g_prof[4] / n, 1e6 * g_prof[5] / n,
            (unsigned long long)g_pso_hits, (unsigned long long)g_pso_lookups, 1e6 * g_prof[6] / l, 1e6 * g_prof[7] / l, (unsigned long long)g_pso_creates, (unsigned long long)g_pso_skips);
   const double f = (double)std::max<uint64_t>(1, g_prof_frames);
-  char tail[200];
-  snprintf(tail, sizeof tail, " | per frame: panel %.3f, present pass %.3f, Present %.3f, whole %.3f ms",
-           1e3 * g_prof[8] / f, 1e3 * g_prof[9] / f, 1e3 * g_prof[10] / f, 1e3 * g_prof[11] / f);
+  char tail[320];
+  snprintf(tail, sizeof tail, " | per frame: panel %.3f, present pass %.3f, Present %.3f, whole %.3f ms (setup %.3f of it GPU slot wait %.3f, geometry %.3f, begin %.3f, close and execute %.3f, end %.3f)",
+           1e3 * g_prof[8] / f, 1e3 * g_prof[9] / f, 1e3 * g_prof[10] / f, 1e3 * g_prof[11] / f,
+           1e3 * g_prof[12] / f, 1e3 * g_prof[17] / f, 1e3 * g_prof[13] / f, 1e3 * g_prof[14] / f, 1e3 * g_prof[15] / f, 1e3 * g_prof[16] / f);
   std::string line = std::string(buf) + tail;
   std::memset(g_prof, 0, sizeof g_prof); g_prof_frames = 0; g_prof_draws = g_pso_hits = g_pso_lookups = g_pso_creates = g_pso_skips = 0;
   return line;

@@ -55,7 +55,7 @@ uint8_t* guest_memory = nullptr;   // the last memory a joint was displayed from
 bool owners_wanted() {
   const LookLive& l = look_live();
   // The path tracer tells fighters from the stage by these too (rtx_semantics.h).
-  return owner_tracking.load(std::memory_order_relaxed) || rtx_semantics_enabled() || l.colours.load(std::memory_order_relaxed) != 0 ||
+  return owner_tracking.load(std::memory_order_relaxed) || predict_owners() || rtx_semantics_enabled() || l.colours.load(std::memory_order_relaxed) != 0 ||
          l.effect_owners.load(std::memory_order_relaxed) || l.fighter.load(std::memory_order_relaxed) != 0 ||
          l.stage.load(std::memory_order_relaxed) != 0 || l.retro.load(std::memory_order_relaxed) ||
          // The Arcade look's 2D camera and background find the fighters by their skinned draws.

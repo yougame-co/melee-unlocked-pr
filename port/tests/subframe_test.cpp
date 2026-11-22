@@ -419,5 +419,105 @@ int main() {
     check(mats.size() == 3 && mats[1].pos[3] > 0.101f, "a world draw with no pose follows a slow pan ahead of the tick");
     check(std::memcmp(mats[2].pos, hud.posMatrices, sizeof mats[2].pos) == 0, "HUD text on its own camera stays where the game drew it during a pan");
   }
+  // Predict ahead, then the motion stops (a dash dance turning, a float starting). The last presented
+  // frame of the moving tick showed the world ahead of where the game ended up; the next tick glides
+  // it back over half a tick instead of snapping in one presented frame. A draw that starts moving
+  // from rest was never shown ahead, so it is not held back.
+  {
+    auto view_at = [](float x) {
+      auto v = std::make_shared<gx::AuthoredPose>(); v->has_view = true; v->view = NativeMelee::Identity(); v->view[3] = x;
+      gx::AuthoredJoint root; root.generation = 1; root.scale = {1,1,1}; root.world = NativeMelee::Identity(); v->joints.push_back(root);
+      return v;
+    };
+    const float world_proj[7] = {1.5f, 0, 2.0f, 0, -1.0f, -2.0f, 0};
+    auto frame_at = [&](uint64_t seq, float x) {
+      gx::Frame f; f.sequence = seq; f.vertices.resize(6, gx::Vertex{});
+      gx::DrawCall camera{}; camera.identity = 400; camera.object_generation = 1; camera.vertex_count = 3; camera.primitive = 0x90;
+      std::memcpy(&camera.xf_regs[0x20], world_proj, sizeof world_proj);
+      std::memcpy(camera.normalMatrices, ident_n, sizeof ident_n);
+      camera.authored_pose = view_at(x); rot_z(0, x, camera.posMatrices);
+      gx::DrawCall world = camera; world.identity = 401; world.object_generation = 0; world.authored_pose = nullptr; world.first_vertex = 3;
+      rot_z(0, x, world.posMatrices);
+      f.draws = {camera, world};
+      return f;
+    };
+    gx::Frame f1 = frame_at(1, 0), f2 = frame_at(2, 0.1f), f3 = frame_at(3, 0.1f);
+    gx::SubFrameSolver glide; glide.max_rotation = 3.0f;
+    glide.set_frames(&f1, &f2); glide.build(.9, false, mats, true); glide.present_shown();
+    const float shown = mats[1].pos[3];
+    glide.set_frames(&f2, &f3); glide.build(.1, false, mats, true); glide.present_shown();
+    const float first = mats[1].pos[3];
+    glide.build(.35, false, mats, true); glide.present_shown();
+    const float middle = mats[1].pos[3];
+    glide.build(.7, false, mats, true);
+    const float settled = mats[1].pos[3];
+    std::printf("predict glide: shown %g, next tick %g -> %g -> %g\n", shown, first, middle, settled);
+    check(shown > 0.15f, "the moving tick is drawn ahead of the game");
+    check(near(first, shown), "the stopped tick starts where the last presented frame left the draw");
+    check(middle < shown && middle > 0.1001f, "half way through the glide");
+    check(near(settled, 0.1f), "the glide is over by half a tick");
+    gx::Frame r1 = frame_at(1, 0), r2 = frame_at(2, 0), r3 = frame_at(3, 0.1f);
+    gx::SubFrameSolver start; start.max_rotation = 3.0f;
+    start.set_frames(&r1, &r2); start.build(.9, false, mats, true); start.present_shown();
+    start.set_frames(&r2, &r3); start.build(.1, false, mats, true);
+    check(mats[1].pos[3] >= 0.1f - 1e-4f, "motion from rest is not held back by the glide");
+    // A present that never reached the screen is not what the next tick glides from: built at phase
+    // .9 but cut short, so the screen still shows the phase .5 present; and a frame presented exactly
+    // as drawn leaves nothing to glide.
+    gx::SubFrameSolver cut; cut.max_rotation = 3.0f;
+    cut.set_frames(&f1, &f2); cut.build(.5, false, mats, true); cut.present_shown();
+    const float half = mats[1].pos[3];
+    cut.build(.9, false, mats, true);   // cut short: no present_shown
+    cut.set_frames(&f2, &f3); cut.build(.1, false, mats, true);
+    check(near(mats[1].pos[3], half), "the glide starts from the last present that was shown, not one cut short");
+    gx::SubFrameSolver exact; exact.max_rotation = 3.0f;
+    exact.set_frames(&f1, &f2); exact.build(.9, false, mats, true); exact.present_shown();
+    exact.present_as_drawn();   // the new frame went out exactly as drawn on arrival
+    exact.set_frames(&f2, &f3); exact.build(.1, false, mats, true);
+    check(near(mats[1].pos[3], 0.1f), "after a frame presented as drawn there is nothing to glide back");
+    // Uncapped, the new frame is presented the moment it arrives, before it is paired. The glide
+    // starts on that frame (found by identity in what was last shown) and this tick's builds fade it.
+    gx::SubFrameSolver arrive; arrive.max_rotation = 3.0f;
+    arrive.set_frames(&f1, &f2); arrive.build(.9, false, mats, true); arrive.present_shown();
+    const float last_shown = mats[1].pos[3];
+    std::vector<gx::DrawMatrices> on_arrival;
+    const bool glided = arrive.arrival_glide(f3, on_arrival);
+    const float arrived = glided && on_arrival.size() == 2 ? on_arrival[1].pos[3] : -1.0f;
+    check(glided && near(arrived, last_shown), "a frame presented on arrival starts where the last present left the draw");
+    check(glided && on_arrival[1].pos[0] == f3.draws[1].posMatrices[0] && on_arrival[1].nrm[0] == f3.draws[1].normalMatrices[0] &&
+          !on_arrival[1].vertices && !on_arrival[1].has_projection, "the rest of an arrival frame is exactly as the game drew it");
+    arrive.set_frames(&f2, &f3); arrive.build(.15, false, mats, true); arrive.present_shown();
+    const float arrive_mid = mats[1].pos[3];
+    arrive.build(.6, false, mats, true); arrive.present_shown();
+    const float arrive_end = mats[1].pos[3];
+    std::printf("arrival glide: shown %g, arrival %g -> %g -> %g\n", last_shown, arrived, arrive_mid, arrive_end);
+    check(arrive_mid < arrived && arrive_mid > 0.1001f, "the builds after an arrival frame continue its glide");
+    check(near(arrive_end, 0.1f), "an arrival glide is over by half a tick");
+    gx::Frame m1 = frame_at(1, 0), m2 = frame_at(2, 0.1f), m3 = frame_at(3, 0.2f), m5 = frame_at(5, 0.1f);
+    gx::SubFrameSolver steady; steady.max_rotation = 3.0f;
+    steady.set_frames(&m1, &m2); steady.build(.9, false, mats, true); steady.present_shown();
+    check(!steady.arrival_glide(m3, on_arrival), "motion that goes on leaves nothing to glide on arrival");
+    check(!arrive.arrival_glide(m5, on_arrival), "a frame that is not the next one after the last shown glides nothing");
+    // A fighter glides as one piece: three of its draws that overshot by different amounts (bones
+    // that disagree, a slot holding another bone) all get the same offset, the median, so its mesh
+    // never stretches between them; texture matrices are never moved.
+    auto fighter_at = [&](uint64_t seq, float x) {
+      gx::Frame f = frame_at(seq, x);
+      for (auto& d : f.draws) d.owner_player = 0;
+      gx::DrawCall arm = f.draws[1]; arm.identity = 402; rot_z(0, x * 3.0f, arm.posMatrices);   // swung three times as far
+      arm.posMatrices[30 * 4 + 3] = 7.0f;   // a texture matrix row
+      f.draws.push_back(arm);
+      return f;
+    };
+    gx::Frame p1 = fighter_at(1, 0), p2 = fighter_at(2, 0.1f), p3 = fighter_at(3, 0.1f);
+    gx::SubFrameSolver rigid; rigid.max_rotation = 3.0f;
+    rigid.set_frames(&p1, &p2); rigid.build(.9, false, mats, true); rigid.present_shown();
+    const bool rigid_glided = rigid.arrival_glide(p3, on_arrival) && on_arrival.size() == 3;
+    const float o_world = rigid_glided ? on_arrival[1].pos[3] - p3.draws[1].posMatrices[3] : 0;
+    const float o_arm = rigid_glided ? on_arrival[2].pos[3] - p3.draws[2].posMatrices[3] : 0;
+    std::printf("rigid glide: world %g, arm %g\n", o_world, o_arm);
+    check(rigid_glided && o_world > 0.01f && near(o_world, o_arm), "every draw of a fighter glides by the same offset");
+    check(rigid_glided && on_arrival[2].pos[30 * 4 + 3] == 7.0f, "a glide never moves a texture matrix");
+  }
   std::puts("sub-frame rigid fractions, cuts, blends, pairing and model-shake isolation passed");
 }

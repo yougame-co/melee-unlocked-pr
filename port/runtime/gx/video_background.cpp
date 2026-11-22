@@ -405,8 +405,15 @@ class Manager {
       Slot& s = slots_[i];
       // A file Windows cannot look at (a link to itself, a cloud file it cannot fetch) counts as absent:
       // the throwing form stopped a 0.8.95 game with "status: unknown error: sss.mp4".
-      std::error_code ec;
-      const bool exists = enabled_ && media_foundation_ && std::filesystem::is_regular_file(s.video_path, ec);
+      // Looked for once a second, not on every presented frame: the two file system calls took 0.2 ms
+      // of each frame, at several hundred frames a second. A video dropped in appears within a second.
+      const double now = host::now_seconds();
+      if (enabled_ && media_foundation_ && (now < file_checked_[i] || now - file_checked_[i] >= 1.0)) {
+        std::error_code ec;
+        file_exists_[i] = std::filesystem::is_regular_file(s.video_path, ec);
+        file_checked_[i] = now;
+      }
+      const bool exists = enabled_ && media_foundation_ && file_exists_[i];
       has_video_[i] = exists;
       if (exists && !started_[i]) {
         s.decoder.start(s.video_path, i == 1);
@@ -709,6 +716,8 @@ class Manager {
   bool enabled_ = true;
   bool started_[2]{};
   bool has_video_[2]{};
+  bool file_exists_[2]{};
+  double file_checked_[2]{-10.0, -10.0};
   int active_slot_ = -1;
   uint16_t last_scene_ = 0xffff;
   unsigned scene_logs_ = 0;

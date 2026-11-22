@@ -81,7 +81,12 @@ int main() {
       tourney+=opt==MU_SLP_OPT_TOURNAMENT;
       assert(mu_online_menu_row(1,0,opt)==row);
     }
-    assert(doubles==0); assert(mu_online_menu_count(1,0)==3+tournament);
+#ifdef MELEE_DOUBLES
+    const int built=1;   // the YouGame page's Doubles row (back 11-21)
+#else
+    const int built=0;
+#endif
+    assert(doubles==built); assert(mu_online_menu_count(1,0)==3+built+tournament);
     assert(slippi==0); assert(tourney==tournament);
     assert(mu_online_menu_count(1,1)==4);
     assert(mu_online_menu_option(1,1,0)==MU_SLP_MODE_DIRECT);   // Unranked is the second row (11-19)

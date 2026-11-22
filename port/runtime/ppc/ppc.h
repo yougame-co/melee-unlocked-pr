@@ -167,6 +167,11 @@ bool runs_from_ram(uint32_t addr);   // addr lies in a function redirected to it
 // a mod session: their compiled caves return into compiled game code, not into RAM code).
 void add_ram_code_range(uint32_t lo, uint32_t hi);
 void remove_ram_code_range(uint32_t lo, uint32_t hi);   // undoes it (a per-scene block that is gone)
+// Slippi's code table, where the game loaded it: an interpreter that branches into it (a C2 cave in a
+// function that runs from RAM) follows the cave in RAM instead of starting another interpreter through
+// the cave's compiled copy. Compiled code and the RAM translator are not affected.
+void set_hook_code_range(uint32_t lo, uint32_t hi);
+bool in_hook_code_range(uint32_t addr);
 // Undoes redirect_to_interpreter for the function at `addr`: its compiled entry is restored byte for
 // byte and its words are no longer followed in RAM. False when it was not redirected.
 bool undo_redirect(uint32_t addr);
