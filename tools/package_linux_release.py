@@ -475,7 +475,7 @@ def main():
     (folder / 'Lab').mkdir(exist_ok=True)
     (folder / 'Lab' / 'README.txt').write_text(
         "The Lab view's fighters are a separate download (about 85 MB). The game fetches them the first\n"
-        'time the Lab view is turned on (F3) and keeps them here through updates.\n', encoding='utf-8')
+        'time the Lab view is turned on (Ctrl+F3) and keeps them here through updates.\n', encoding='utf-8')
     # Mod import tools: the system's 7-Zip and xdelta3, as the Windows release carries its own.
     tools = folder / 'tools'
     tools.mkdir()

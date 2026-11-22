@@ -116,7 +116,7 @@ struct RenderOptions {
   // hidden (H shows it). For tournament VODs and clips. The game's own HUD and the chosen look stay.
   bool clean_replays = false;
   // Lab view: draw matches as Slippi Lab draws replays (flat silhouettes on a plain stage) over
-  // the game image. Display only, so it is safe online. F3 toggles it. See lab_view.h.
+  // the game image. Display only, so it is safe online. Ctrl+F3 toggles it. See lab_view.h.
   bool lab_view = false;
   // While the Lab view covers the window, skip replaying the game's own draws: the scene would be
   // drawn only to be painted over. Saves the GPU (and draw submission) its whole frame in a match.

@@ -651,7 +651,7 @@ def main():
     (folder / "Lab").mkdir(exist_ok=True)
     (folder / "Lab" / "README.txt").write_text(
         "The Lab view's fighters are a separate download (about 85 MB). The game fetches them the first\n"
-        "time the Lab view is turned on (F3) and keeps them here through updates.\n", encoding="utf-8")
+        "time the Lab view is turned on (Ctrl+F3) and keeps them here through updates.\n", encoding="utf-8")
     mod_tools = ROOT / "port/third_party/mod_tools"
     (folder / "tools").mkdir(exist_ok=True)
     for tool, digest in (("xdelta3.exe", "d81f59b2fe5e8589c0ee9782e231c805084f4d23dfade413903a4cad63b4e342"),
