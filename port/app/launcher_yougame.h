@@ -80,6 +80,11 @@ AppHook ask_app_hook(std::string* detail);
 // unless MELEE_LAUNCHER_TEST_YOUGAME_APP=1). A game the launcher starts with no YouGame sign-in of its own is
 // handed to the YouGame app only then (the app's channel, and the hook's window on a YouGame row).
 bool app_hook_available();
+// The extension's app is neither: the launcher's word to the player (it names the other environment's app when only
+// that one is there); empty when the app is there. Registry and pipe checks only.
+std::string extension_app_missing();
+// This launcher's YouGame app is running (never the other environment's). Pipe check only.
+bool app_running();
 // The launcher starting: its browser view's folder holds a session (a sign-in made before) that launcher.ini
 // does not name. Asks the site through the hidden view, as warm() does (never a window); true when it answered
 // signed in (account() is that account then). Blocking: never on the window thread. *why (when given) says

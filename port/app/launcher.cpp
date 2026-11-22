@@ -2025,8 +2025,22 @@ void launch_game_now() {
                           launcher::yougame::listed_current() && launcher::yougame::app_hook_available() &&
                           !launcher::yougame::app_declined();
   const bool hybrid = !vanilla_active() && !app_backed && launcher::yougame::extension();
-  const std::string app_channel = hybrid || app_backed ? yougame_app_channel() : std::string();   // for the log line only
-  if (hybrid && app_channel.empty())
+  // The extension needs this launcher's YouGame app (production since 0.9.993). Without it (only YouGame Staging
+  // on the computer, player report 11-21) the player is told once a session and offered the download page; the
+  // other environment's running app is never taken for it (it used to count as "running" and nothing happened).
+  const std::string app_missing = hybrid ? launcher::yougame::extension_app_missing() : std::string();
+  const std::string app_channel = app_backed || (hybrid && app_missing.empty() && launcher::yougame::app_running())
+      ? yougame_app_channel() : std::string();   // for the log line only
+  if (!app_missing.empty()) {
+    log_line("yougame: extension: %s", app_missing.substr(0, app_missing.find('\n')).c_str());
+    static bool told = false;
+    if (!told && !std::getenv("MELEE_LAUNCHER_TEST")) {
+      told = true;
+      if (MessageBoxW(g_main, widen(app_missing).c_str(), L"YouGame extension", MB_YESNO | MB_ICONINFORMATION) == IDYES)
+        ShellExecuteW(nullptr, L"open", widen(launcher::yougame::open_target()).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+  }
+  if (hybrid && app_missing.empty() && app_channel.empty())
     std::thread([] {
       std::string detail;
       launcher::yougame::start_app_quietly(&detail);
@@ -2144,6 +2158,20 @@ void browse() {
       mod_manager::open(); std::thread(mod_manager::install_file, std::wstring(file), std::string(), g_iso).detach(); return;
     }
     if (mod_manager::hash_file(file, BCRYPT_MD5_ALGORITHM) != mod_manager::kVanillaMd5) {
+      // Not the vanilla disc. Only a Melee NTSC 1.02 disc can be a mod; anything else (another game, NTSC 1.00 or
+      // 1.01, PAL, a trimmed image) used to be filed under Mods too, where it loaded nothing and the player was
+      // told nothing (player report 11-21: "whenever I browse for an ISO it just goes to the mods tab").
+      std::string why;
+      if (!verify_iso(narrow(file), &why)) {
+        MessageBoxW(g_main, widen("This disc can't be used: " + why + ".\n\nMelee Unlocked needs your Melee NTSC 1.02 ISO "
+                                  "(a full, unmodified disc image). Press Browse and pick that file.").c_str(),
+                    L"Melee Unlocked Launcher", MB_ICONINFORMATION);
+        return;
+      }
+      if (g_iso.empty())
+        MessageBoxW(g_main, L"This is a modded Melee disc, so it goes into Mods.\n\nTo play, Melee Unlocked also needs your "
+                    L"unmodified Melee NTSC 1.02 ISO: press Browse on the Play page and pick it.",
+                    L"Melee Unlocked Launcher", MB_ICONINFORMATION);
       mod_manager::open(); std::thread(mod_manager::install_file, std::wstring(file), std::string(), g_iso).detach();
     } else { set_iso(narrow(file)); save_ini(); }
   }

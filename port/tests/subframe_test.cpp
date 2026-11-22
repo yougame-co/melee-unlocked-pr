@@ -15,6 +15,25 @@ static void rot_z(float deg, float tx, float out[12]) {
   std::memcpy(out, m, sizeof m);
 }
 int main() {
+  // Predict samples an animation that advanced at a new speed (a run, a dash, air drift: the game sets the
+  // rate from the velocity each frame); a restart, a pause or a swap is still no continuation (player video 11-21).
+  {
+    gx::AuthoredJoint p, c;
+    p.frame = 10; p.rate = 1.0f; p.end = 60; c = p;
+    c.frame = 11.5f; c.rate = 1.5f;   // advanced by the new rate
+    if (!gx::authored_retimed_clock(p, c)) { std::printf("retimed clock (new rate) not accepted\n"); return 1; }
+    c.frame = 11.0f;                  // advanced by the old rate, the new one set after
+    if (!gx::authored_retimed_clock(p, c)) { std::printf("retimed clock (old rate) not accepted\n"); return 1; }
+    c.frame = 0.0f;                   // restarted
+    if (gx::authored_retimed_clock(p, c)) { std::printf("restart taken as a retime\n"); return 1; }
+    c.frame = 10.0f;                  // paused
+    if (gx::authored_retimed_clock(p, c)) { std::printf("pause taken as a retime\n"); return 1; }
+    c.frame = 11.5f; c.end = 40;      // another animation (its length differs)
+    if (gx::authored_retimed_clock(p, c)) { std::printf("swap taken as a retime\n"); return 1; }
+    c = p; c.frame = 11.0f;           // same rate: the ordinary clock, not a retime
+    if (gx::authored_retimed_clock(p, c)) { std::printf("same rate taken as a retime\n"); return 1; }
+    std::printf("retimed clock: speed changes sampled, restarts, pauses and swaps held\n");
+  }
   // A render-to-texture camera keeps its authored projection: its consumers use
   // an authored projective texture matrix, even while the main view is widened.
   {
@@ -249,9 +268,15 @@ int main() {
     paused_previous.joints[0].frame = 1000; paused_previous.joints[0].translation[0] = 0; paused_previous.joints[0].world[3] = 0;
     check(gx::sample_authored(paused_previous, paused_current, .5, joint.world.data(), out, nrm, ident_n) && near(out[3], 7.5f),
           "advancing long-running animation still samples at its declared rate");
+    // A speed change (the game sets a run's or a drift's rate from the velocity): the frame advanced by the new
+    // rate, so Predict samples on at that rate instead of holding the joint for the frame (11-21: 60 Hz steps).
     paused_previous.joints[0].rate = .5f;
+    check(gx::sample_authored(paused_previous, paused_current, .5, joint.world.data(), out, nrm, ident_n) && near(out[3], 7.5f),
+          "retimed animation predicts at its new rate");
+    // A frame that neither rate explains is no continuation: it waits for a continuous pair.
+    paused_previous.joints[0].frame = 999.25f;
     check(!gx::sample_authored(paused_previous, paused_current, .5, joint.world.data(), out, nrm, ident_n),
-          "retimed animation waits for a continuous pair before predicting");
+          "a clock neither rate explains waits for a continuous pair before predicting");
   }
   current_pose.joints[0].end = 1;
   check(!gx::sample_authored(previous_pose, current_pose, 0.5, joint.world.data(), out, nrm, ident_n), "authored sampling holds at animation boundary");

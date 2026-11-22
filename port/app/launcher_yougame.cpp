@@ -624,6 +624,29 @@ AppHook ask_app_hook(std::string* detail) {
   }
 }
 
+// This launcher's YouGame app is running (its channel's pipe is there); never the other environment's.
+bool app_running() {
+  bool staging;
+  { std::lock_guard<std::mutex> lock(g_mutex); staging = g_env.id == "staging"; }
+  return app::running(staging);
+}
+
+// The extension's app for this launcher's YouGame is neither installed nor running: what the launcher tells the
+// player (empty when the app is there). Player report 11-21: a computer with only the YouGame Staging app got no
+// extension and no word why; since 0.9.993 the launcher and game use YouGame (production) only, so the other
+// environment's app is never used for the extension.
+std::string extension_app_missing() {
+  bool staging;
+  { std::lock_guard<std::mutex> lock(g_mutex); staging = g_env.id == "staging"; }
+  if (app::installed(staging) || app::running(staging)) return {};
+  const std::string name = staging ? "YouGame Staging" : "YouGame";
+  const bool other = app::installed(!staging) || app::running(!staging);
+  return "Launch with YouGame extension needs the " + name + " app" +
+         (other ? std::string(". This computer has only ") + (staging ? "YouGame" : "YouGame Staging") + ", which this version does not use."
+                : ", which is not installed.") +
+         " YouGame matches work without it.\n\nOpen the page where the " + name + " app downloads?";
+}
+
 bool app_declined() { std::lock_guard<std::mutex> lock(g_mutex); return g_app_choice == 0; }
 bool app_used_before() { std::lock_guard<std::mutex> lock(g_mutex); return g_app_choice == 1; }
 

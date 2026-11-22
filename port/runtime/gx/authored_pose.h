@@ -91,6 +91,8 @@ AuthoredStats& authored_stats();
 // Interpolate (exact in-betweens of the previous and current game frames, one frame late) instead
 // of predicting ahead of the current frame. Set by the solver before sampling.
 void set_authored_interpolate(bool on);
+// The same animation advanced at a new speed: Predict samples it (authored_pose.cpp retimed_clock). For the tests.
+bool authored_retimed_clock(const AuthoredJoint& previous, const AuthoredJoint& current);
 // Per-presented-frame cache of sampled joint chains: draws of one object share the chain.
 struct AuthoredChain { bool ok = false; std::array<float,12> world{}, inverse_current{}; };
 // `allow_static` changes the outcome for a chain with no animation, so it belongs in the key:

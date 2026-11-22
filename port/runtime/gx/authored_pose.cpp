@@ -101,6 +101,25 @@ bool continuous_clock(const AuthoredJoint& previous, const AuthoredJoint& curren
       std::abs(expected - current.frame) <= 0.0001f;
 }
 
+// The same animation advanced at a new speed: the game sets a run's, a dash's or an air drift's animation
+// rate from the fighter's velocity every frame, so while the speed changes the rate changes too. The frame
+// moved forward by the old or the new rate and nothing else about the clock changed. Predict samples such a
+// clock from the current frame at the current rate (exact at the start of each game frame); it used to hold
+// the joint instead, so runs, dashes, wavedashes and air drift stepped at 60 Hz with Predict at high frame
+// rates while Interpolate was smooth (player report and video 11-21).
+bool retimed_clock(const AuthoredJoint& previous, const AuthoredJoint& current) {
+  constexpr uint32_t clock_flags = (1u << 27) | (1u << 28) | AOBJ_LOOP | (1u << 30);
+  if (!std::isfinite(current.rate) || !std::isfinite(previous.rate) || current.rate == 0 || previous.rate == current.rate ||
+      previous.frame == current.frame || previous.end != current.end || previous.rewind != current.rewind ||
+      ((previous.anim_flags ^ current.anim_flags) & clock_flags) ||
+      (current.anim_flags & ((1u << 27) | (1u << 28) | (1u << 30)))) return false;
+  for (const float rate : {previous.rate, current.rate}) {
+    const float expected = wrap_frame(current, previous.frame + rate);
+    if (std::isfinite(expected) && std::isfinite(current.frame) && std::abs(expected - current.frame) <= 0.001f) return true;
+  }
+  return false;
+}
+
 // The local matrix of a JOBJ_USE_QUATERNION joint. MTXQuat (mtx.c) builds the rotation from the
 // quaternion; HSD_MtxSRT then applies scale before it and the translation after, and the inherited
 // scale is divided out per row exactly as the Euler path in Geometry.h does. Quaternions are blended
@@ -283,7 +302,9 @@ static bool sample_chain(const AuthoredPose& previous,const AuthoredPose& curren
       // Split by cause so only a genuine clock discontinuity (restart, retime, swap) reads as s3.
       bool sampled=false,blended=false;
       if(!j.tracks.empty()) {
-        const bool clock=continuous_clock(p,j);
+        const bool retimed=!interp&&retimed_clock(p,j);   // Predict only: see retimed_clock
+        if(retimed) ++authored_stats().sample[28];          // s28: sampled across a speed change
+        const bool clock=continuous_clock(p,j)||retimed;
         sampled=clock&&sample_frame>=0&&sample_frame<=j.end;
         if(!sampled) {
           if(p.frame==j.frame) ++authored_stats().sample[24];        // paused: holding is correct
@@ -597,3 +618,8 @@ const char* const kCaptureFeatureNames[FEAT_COUNT] = {
   "robj_animated", "robj_deep", "robj_target", "robj_cycle"
 };
 }
+
+namespace gx {
+// For the sub-frame test: the same animation advanced at a new speed (retimed_clock, Predict).
+bool authored_retimed_clock(const AuthoredJoint& previous, const AuthoredJoint& current) { return retimed_clock(previous, current); }
+}  // namespace gx
