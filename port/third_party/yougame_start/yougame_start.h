@@ -55,7 +55,7 @@
  *      (the mini app has no window to hide). Its versions are its own, so `tray_from` is only
  *      required to be set, never compared. The mini app answers on the app's own channel, so step 1
  *      sees it running. Players know the mini app as "YouGame Online": the window's words for an
- *      installed copy say that name ("Open YouGame Online"); "Get YouGame" stays as it is.
+ *      installed copy say that name ("Open YouGame Online").
  *   3. YouGame is not on this computer: the small window says "Play online with YouGame". On
  *      Windows, where Get installs the site's start installer (the mini app today), it offers
  *      "YouGame Online" instead ("Play <game> online", "Get YouGame Online"; for a game that needs
@@ -84,8 +84,9 @@
  *   Linux: -pthread. Its small window uses /usr/bin/zenity, else /usr/bin/kdialog; with neither
  *     there is no window and the result is YG_START_DECLINED.
  * It downloads only after the player presses Get YouGame on Windows: the installer, from
- * https://yougame.co /api/desktop/download?file=YouGame-windows-x64.exe (staging:
- * https://staging.yougame.co ...?file=YouGame-Start-windows-x64.exe), into
+ * https://yougame.co /api/desktop/download?file=YouGame-Start-windows-x64.exe (staging:
+ * https://staging.yougame.co, same path), which each site answers with the mini app's installer or the
+ * app's (its start_get_product setting), into
  * %LOCALAPPDATA%\YouGame Start, removed after it ran. The only programs it starts, after the
  * player's answer or the checks above: on Windows the signed YouGame program at its install location,
  * with the tray link, or the signed mini app's YouGame.exe in its folder, with no arguments (neither
@@ -235,7 +236,7 @@ static int yg__start_raised_rule(int full, int elevated, int shell_peer) {
 #define YG__START_LATER "Play offline"
 #define YG__START_OPEN "Open YouGame"
 /* The mini app's name (Windows, step M): what the window says when the mini app, not the YouGame app,
-   is what is installed. Get YouGame keeps its word: it downloads whatever the site sends. */
+   is what is installed, and, on Windows, what Get installs (Get YouGame Online, see yg_start). */
 #define YG__START_MINI_NAME "YouGame Online"
 #define YG__START_UPDATE_MINI "Update YouGame Online"
 #define YG__START_GET_MINI "Get YouGame Online"
@@ -2188,11 +2189,10 @@ static int yg__start_get_download(const wchar_t *path, int staging) {
   if (!s) goto done;
   net_timeouts(s, 15000, 15000, 30000, 30000);
   c = net_connect(s, staging ? L"staging.yougame.co" : L"yougame.co", 443, 0);
-  /* Staging asks for the start installer, which the site answers with the app's installer or the mini
-     app's (its start_get_product setting); production keeps the app's own name until the site serves
-     the start name there too. Either is checked the same way before it runs. */
-  if (c) r = net_request(c, L"GET", staging ? L"/api/desktop/download?file=YouGame-Start-windows-x64.exe"
-                                            : L"/api/desktop/download?file=YouGame-windows-x64.exe",
+  /* Both sites are asked for the start installer, which each answers with the app's installer or the
+     mini app's (its start_get_product setting), so the window's words (yg_start) name what arrives.
+     Either is checked the same way before it runs. */
+  if (c) r = net_request(c, L"GET", L"/api/desktop/download?file=YouGame-Start-windows-x64.exe",
                          NULL, NULL, NULL, 0x00800000 /* WINHTTP_FLAG_SECURE */);
   if (!r || yg__start_g.stop || !net_send(r, NULL, 0, NULL, 0, 0, 0) || !net_receive(r, NULL)) goto done;
   len = sizeof status;
