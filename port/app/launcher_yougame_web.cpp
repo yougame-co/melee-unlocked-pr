@@ -510,7 +510,7 @@ void on_code(std::unique_ptr<CodeNews> n) {
   switch (n->kind) {
     case CodeNews::kCode: {
       const json c = json::parse(n->text, nullptr, false);
-      g->code_page = c.is_object() && c.contains("url") && c["url"].is_string() ? c["url"].get<std::string>() : std::string();
+      g->code_page = c.is_object() && c.count("url") && c["url"].is_string() ? c["url"].get<std::string>() : std::string();
       g->code_state = n->text;
       if (n->open && !g->code_page.empty())
         ShellExecuteW(nullptr, L"open", wide(g->code_page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
