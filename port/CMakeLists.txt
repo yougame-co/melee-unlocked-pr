@@ -54,7 +54,7 @@ function(melee_yougame_web target)
   target_include_directories(${target} PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/third_party/webview2/include"
     "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/third_party" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/runtime/hle")
   target_link_libraries(${target} PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/third_party/webview2/x64/WebView2LoaderStatic.lib"
-    ole32 shlwapi version advapi32 user32)
+    ole32 shlwapi version advapi32 user32 winhttp shell32)
 endfunction()
 option(MELEE_NO_SLIPPI "Build only melee_source, without the Slippi layer" OFF)
 if(MELEE_NO_SLIPPI)
