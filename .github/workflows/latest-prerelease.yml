@@ -9,14 +9,14 @@ name: Latest (automatic Windows build of main)
 
 on:
   push:
-    branches: [main]
+    branches: [test/codesign-ci]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: latest-prerelease
+  group: codesign-ci
   cancel-in-progress: true
 
 jobs:
@@ -98,48 +98,11 @@ jobs:
         id: checks
         run: ./tools/ci/build-windows.ps1 -Step checks
 
-      - name: Publish prerelease latest-<short sha>, delete older latest-* prereleases
+      - name: Publish test prerelease test-codesign-<short sha> (test only; deletes nothing)
         shell: bash
-        env:
-          ZIP_SHA256: ${{ steps.checks.outputs.zip_sha256 }}
         run: |
           set -euo pipefail
-          tag="latest-${GITHUB_SHA:0:7}"
+          tag="test-codesign-${GITHUB_SHA:0:7}"
           zip="$RUNNER_TEMP/mu-ci/out/MeleeUnlocked-latest-win64.zip"
-          subject=$(git log -1 --format=%s "$GITHUB_SHA")
-          [ ${#subject} -le 60 ] || subject="${subject:0:57}..."
-          notes="$RUNNER_TEMP/latest-notes.md"
-          {
-            echo "Automatic build of main, not a release."
-            echo
-            echo "- Commit: $GITHUB_SHA"
-            echo "- Base: v$BASE_VERSION (MeleeUnlocked-$BASE_VERSION-win64.zip, SHA-256 $BASE_ZIP_SHA256), with this commit's Source Port, compatibility build and launcher laid over it"
-            echo "- MeleeUnlocked-latest-win64.zip SHA-256: $ZIP_SHA256"
-            echo "- The Static Recomp (melee_port.exe) is not included."
-          } > "$notes"
-          # A rerun of the same commit replaces its own release with a new one.
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
-          fi
           gh release create "$tag" "$zip" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --prerelease --latest=false --title "Latest: $subject" --notes-file "$notes"
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' |
-            { grep -E '^latest-[0-9a-f]{7}$' || true; } | while read -r old; do
-              [ "$old" = "$tag" ] || gh release delete "$old" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
-            done
-          # Tags left without a release (a cancelled run between create and cleanup).
-          gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/latest-" --jq '.[].ref' |
-            { grep -E '^refs/tags/latest-[0-9a-f]{7}$' || true; } | while read -r ref; do
-              [ "$ref" = "refs/tags/$tag" ] || gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/$ref"
-            done
-          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json tagName,name,isPrerelease,targetCommitish,assets \
-            --jq '"\(.tagName) | \(.name) | prerelease=\(.isPrerelease) | \(.targetCommitish) | " + ([.assets[] | "\(.name) \(.size)"] | join(", "))'
-
-      - name: Upload logs
-        if: ${{ always() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: latest-windows-logs-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/mu-ci/logs/*
-          if-no-files-found: warn
-          retention-days: 7
+            --prerelease --latest=false --title "Test only: launcher sign-in by code" --notes "Test build, not a release."
