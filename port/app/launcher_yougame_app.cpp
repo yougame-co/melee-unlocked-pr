@@ -226,7 +226,8 @@ int start_get_progress(int* percent) { return yg_start_get_progress(percent); }
 
 namespace {
 // ask, and with `disc` set tell_disc: after hello the disc instead of the connect code (*disc_said: the result).
-Answer talk(bool staging, const std::string& version, int timeout_ms, const std::string* disc, std::string* disc_said) {
+Answer talk(bool staging, const std::string& version, int timeout_ms, const std::string* disc, std::string* disc_said,
+            std::string* sign_in = nullptr) {
   Answer out;
   channel::Candidate where;
   std::string why;
@@ -323,14 +324,28 @@ Answer talk(bool staging, const std::string& version, int timeout_ms, const std:
     if (out.state == Answer::kSignedIn && out.name.empty())
       out.name = out.code.empty() ? std::string("Player") : out.code.substr(0, out.code.find('#'));
   }
+  if (sign_in && out.state == Answer::kSignedOut) {
+    // The app's public signIn with no provider: YouGame's overlay takes it, or the app opens YouGame's own sign-in
+    // page in the browser; once the player approves, the app is signed in and a later hello gives the account.
+    const json r = request({{"type", "signIn"}}, 8000);
+    const std::string c = r.is_object() && r.count("code") && r["code"].is_string() ? r["code"].get<std::string>() : "";
+    if (r.is_object() && r.value("ok", false)) {
+      const json res = r.count("result") && r["result"].is_object() ? r["result"] : json::object();
+      *sign_in = res.count("where") && res["where"].is_string() ? res["where"].get<std::string>() : "browser";
+    } else if (c == "busy") {
+      *sign_in = "busy " + std::to_string((unsigned long long)channel::retry_after_ms(r));
+    } else {
+      *sign_in = "refused " + (c.empty() ? std::string(r.is_object() ? "no code" : "no answer") : c);
+    }
+  }
   conn->close();
   reader.join();
   return out;
 }
 }  // namespace
 
-Answer ask(bool staging, const std::string& version, int timeout_ms) {
-  return talk(staging, version, timeout_ms, nullptr, nullptr);
+Answer ask(bool staging, const std::string& version, int timeout_ms, std::string* sign_in) {
+  return talk(staging, version, timeout_ms, nullptr, nullptr, sign_in);
 }
 
 std::string tell_disc(bool staging, const std::string& version, const std::string& path, int timeout_ms) {
