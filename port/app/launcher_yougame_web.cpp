@@ -28,6 +28,7 @@
 #include <shlwapi.h>
 #include <winhttp.h>
 #include <fstream>
+#include <iterator>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -57,6 +58,7 @@ constexpr uint64_t kIdleCloseMs = 30 * 60000;
 constexpr UINT WM_JOB = WM_APP + 1;
 constexpr UINT WM_RAISE = WM_APP + 2;   // the sign-in window comes to the front (Connect pressed again)
 constexpr UINT WM_CODE = WM_APP + 3;    // news from the sign-in code's own thread (CodeNews*)
+constexpr UINT WM_START_CODE = WM_APP + 4;   // start_code(wparam != 0), posted from the view's own callbacks
 // Signing in with the browser (YouGame's sign-in by code, docs/DEVICE_SIGNIN.md on YouGame's side): the launcher
 // asks YouGame for a code as the YouGame app does (its client, kind "session"), the player approves it on
 // <site>/link in their own browser (or on any device), and the code's one-time hand-off is posted to the site in
@@ -278,8 +280,12 @@ void code_flow_steps(int run, const std::string& site, bool open, const std::wst
   };
   const auto live = [&] { return g_code_run.load() == run; };
   const std::wstring file = test_dir.empty() ? std::wstring() : test_dir + L"\\" + wide(kCodeFile);
+  std::string mine;   // this run's user code once written: a newer run's file is never removed
   const auto drop_file = [&] {
-    if (file.empty()) return;
+    if (file.empty() || mine.empty()) return;
+    std::string held;
+    { std::ifstream in(std::filesystem::path(file), std::ios::binary); held.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()); }
+    if (held.find("\"" + mine + "\"") == std::string::npos) return;
     std::error_code ec;
     std::filesystem::remove(file, ec);
   };
@@ -319,6 +325,7 @@ void code_flow_steps(int run, const std::string& site, bool open, const std::wst
     const std::wstring tmp = file + L".tmp";
     { std::ofstream out(std::filesystem::path(tmp), std::ios::binary | std::ios::trunc); out << f.dump(2); }
     std::filesystem::rename(tmp, file, ec);
+    if (!ec) mine = user;
   }
   const uint64_t until = GetTickCount64() + (uint64_t)expires * 1000;
   const std::string poll = "grant_type=" + form_value("urn:ietf:params:oauth:grant-type:device_code") +
@@ -384,6 +391,8 @@ struct Engine {
   // ({} offers it; {busy}; {code, where, url}; {error}), and the code's page while it lasts.
   std::string code_state = "{}";
   std::string code_page;
+  bool code_asking = false;    // a code was asked for and has not come yet
+  bool code_handing = false;   // the hand-off was posted: the next page says whether it signed in
 };
 Engine* g = nullptr;
 
@@ -450,13 +459,16 @@ std::wstring code_test_dir() {
 }
 
 // Signing in with the browser: a new code (open: and the browser on its page), or the live one's page again.
+// On the window's own message loop (WM_START_CODE), never inside a view callback: ShellExecuteW may wait.
 void start_code(bool open) {
   if (!g->signin) return;
-  if (open && !g->code_page.empty()) {
-    ShellExecuteW(nullptr, L"open", wide(g->code_page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+  if (!g->code_page.empty()) {
+    if (open) ShellExecuteW(nullptr, L"open", wide(g->code_page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     return;
   }
+  if (g->code_asking) return;   // a code is on its way (a double click, a provider page redirecting again)
   const int run = ++g_code_run;
+  g->code_asking = true;
   g->code_page.clear();
   g->code_state = json{{"busy", "Getting a sign-in code..."}}.dump();
   draw_code_bar();
@@ -484,13 +496,17 @@ void complete_code(const std::string& handoff) {
     if (!sent) g->navigating = false;
   }
   if (stream) stream->Release();
+  g->code_handing = sent;
   g->code_page.clear();
   g->code_state = (sent ? json{{"busy", "Signing you in..."}} : json{{"error", "The sign-in did not finish."}}).dump();
   if (!sent) draw_code_bar();
 }
 
+void start_code_later(bool open) { PostMessageW(g_window, WM_START_CODE, open ? 1 : 0, 0); }
+
 void on_code(std::unique_ptr<CodeNews> n) {
   if (!g->signin || n->run != g_code_run.load()) return;
+  g->code_asking = false;
   switch (n->kind) {
     case CodeNews::kCode: {
       const json c = json::parse(n->text, nullptr, false);
@@ -537,6 +553,7 @@ void finish_sign_in(bool ok, const std::string& why) {
   std::unique_ptr<Job> job = std::move(g->signin);
   g->signin_check = 0;
   ++g_code_run;   // a code still waiting stops (and its test file goes)
+  g->code_asking = g->code_handing = false;
   g->code_state = "{}";
   g->code_page.clear();
   ShowWindow(g_window, SW_HIDE);
@@ -616,6 +633,16 @@ void on_view(ICoreWebView2Controller* controller) {
         if (g->signin) {
           // The page (or the view's own page saying it could not load) is drawn now: show it.
           if (!current_origin().empty()) show_page(true);
+          // The hand-off landed back on the sign-in page: it did not sign in (used, or the account refused).
+          if (g->code_handing) {
+            g->code_handing = false;
+            LPWSTR src = nullptr;
+            std::string at;
+            if (SUCCEEDED(g->view->get_Source(&src)) && src) at = narrow(src);
+            CoTaskMemFree(src);
+            const std::string path = at.substr(std::min(at.size(), origin_of(at).size()));
+            if (path.rfind("/login", 0) == 0) g->code_state = json{{"error", "The sign-in did not finish."}}.dump();
+          }
           draw_code_bar();
           check_sign_in();
           return S_OK;
@@ -645,7 +672,7 @@ void on_view(ICoreWebView2Controller* controller) {
         const std::string where = origin_of(to);
         if (where.empty() || where == g->signin->site || (where.rfind("http", 0) != 0)) return S_OK;
         args->put_Cancel(TRUE);
-        start_code(true);
+        start_code_later(true);
         return S_OK;
       }).Get(), nullptr);
   g->view->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>(
@@ -661,12 +688,12 @@ void on_view(ICoreWebView2Controller* controller) {
         CoTaskMemFree(text);
         // The bar at the foot of the sign-in page (draw_code_bar).
         if (m.is_object() && m.count("mu") && m["mu"].is_string()) {
-          if (m["mu"] == "code" || m["mu"] == "open") start_code(true);   // "open": the live code's page again
+          if (m["mu"] == "code" || m["mu"] == "open") start_code_later(true);   // "open": the live code's page again
           return S_OK;
         }
         if (!m.is_object() || !m.count("id") || !m["id"].is_number_integer()) return S_OK;
         const int id = m["id"].get<int>();
-        const int status = m.value("status", 0);
+        const int status = m.count("status") && m["status"].is_number_integer() ? m["status"].get<int>() : 0;
         std::string body = m.count("body") && m["body"].is_string() ? m["body"].get<std::string>() : std::string();
         if (g->signin && id == g->signin_check) {
           g->signin_check = 0;
@@ -685,11 +712,12 @@ void on_view(ICoreWebView2Controller* controller) {
       [](ICoreWebView2* view, ICoreWebView2NewWindowRequestedEventArgs* args) {
         LPWSTR uri = nullptr;
         args->put_Handled(TRUE);
+        if (FAILED(args->get_Uri(&uri))) uri = nullptr;
         const std::string to = uri ? narrow(uri) : std::string();
         CoTaskMemFree(uri);
         if (!g->signin || to.empty()) return S_OK;
         // Another site's sign-in window (Google's, say) goes to the player's browser, by code (as above).
-        if (origin_of(to) != g->signin->site) start_code(true);
+        if (origin_of(to) != g->signin->site) start_code_later(true);
         else view->Navigate(wide(to).c_str());
         return S_OK;
       }).Get(), nullptr);
@@ -739,6 +767,7 @@ void take(std::unique_ptr<Job> job) {
       g->site = g->signin->site;
       g->code_state = "{}";
       g->code_page.clear();
+      g->code_asking = g->code_handing = false;
       // An agent's test copy (kCodeEnv) asks for a code at once and writes its page; no browser opens.
       if (!code_test_dir().empty()) start_code(false);
       RECT area{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
@@ -818,6 +847,9 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_CODE:
       if (g) on_code(std::unique_ptr<CodeNews>((CodeNews*)l));
       else delete (CodeNews*)l;
+      return 0;
+    case WM_START_CODE:
+      if (g) start_code(w != 0);
       return 0;
     case WM_RAISE:
       if (g && g->signin && IsWindowVisible(h)) {
