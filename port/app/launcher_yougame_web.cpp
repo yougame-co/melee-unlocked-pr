@@ -24,6 +24,10 @@
 #include <wintrust.h>
 #include <urlmon.h>
 #include <shlobj.h>
+#include <shellapi.h>
+#include <shlwapi.h>
+#include <winhttp.h>
+#include <fstream>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "shlwapi.lib")
@@ -33,6 +37,7 @@
 #pragma comment(lib, "wintrust.lib")
 #pragma comment(lib, "crypt32.lib")
 #pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "winhttp.lib")
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
@@ -51,6 +56,18 @@ constexpr const char* kSignInPage = "/login?bare=1";
 constexpr uint64_t kIdleCloseMs = 30 * 60000;
 constexpr UINT WM_JOB = WM_APP + 1;
 constexpr UINT WM_RAISE = WM_APP + 2;   // the sign-in window comes to the front (Connect pressed again)
+constexpr UINT WM_CODE = WM_APP + 3;    // news from the sign-in code's own thread (CodeNews*)
+// Signing in with the browser (YouGame's sign-in by code, docs/DEVICE_SIGNIN.md on YouGame's side): the launcher
+// asks YouGame for a code as the YouGame app does (its client, kind "session"), the player approves it on
+// <site>/link in their own browser (or on any device), and the code's one-time hand-off is posted to the site in
+// this view, which sets the view's own session as the sign-in form would. Used when the sign-in would leave the
+// site (Google and the other sign-in providers, which refuse to sign in inside an app's view) and when the player
+// picks "Use your browser". Agent test copies: YOUGAME_TEST_CODE_SIGNIN=<absolute folder> asks for a code as the
+// window opens and writes its /link page to <folder>/sign-in-code.json (the YouGame app's own format); nobody
+// sets it on a player's computer, and the file signs nobody in by itself: whoever approves the page picks the account.
+constexpr const char* kCodeClient = "625cdcb5-bad8-4d20-b120-0aecb4ff6460";
+constexpr const char* kCodeEnv = "YOUGAME_TEST_CODE_SIGNIN";
+constexpr const char* kCodeFile = "sign-in-code.json";
 // The sign-in window's own colour and words until YouGame's page has drawn: never a black window.
 constexpr COLORREF kLoadingBack = RGB(244, 245, 247), kLoadingText = RGB(70, 74, 82);
 
@@ -75,6 +92,16 @@ std::string origin_of(const std::string& url) {
   return url.substr(0, end);
 }
 
+std::string form_value(const std::string& v) {
+  static const char* hex = "0123456789ABCDEF";
+  std::string out;
+  for (unsigned char c : v) {
+    if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out += (char)c;
+    else { out += '%'; out += hex[c >> 4]; out += hex[c & 15]; }
+  }
+  return out;
+}
+
 struct Job {
   enum Kind { kRequest, kSignIn, kClose, kSignOut } kind = kRequest;
   std::string site, method, path, body, script;
@@ -92,6 +119,50 @@ struct Job {
 };
 
 std::mutex g_mutex;              // the folder, and starting the thread
+
+// A form POST made by the launcher itself, never by a page: YouGame's code routes refuse a page's request.
+// Any thread. Sends no Origin and no Sec-Fetch-Site, as a native client should.
+Reply post_form(const std::string& url, const std::string& body) {
+  Reply out;
+  const std::wstring w = wide(url);
+  URL_COMPONENTS u{};
+  u.dwStructSize = sizeof u;
+  wchar_t host[256] = {}, path[2048] = {};
+  u.lpszHostName = host;
+  u.dwHostNameLength = 256;
+  u.lpszUrlPath = path;
+  u.dwUrlPathLength = 2048;
+  if (!WinHttpCrackUrl(w.c_str(), 0, 0, &u)) return out;
+  HINTERNET session = WinHttpOpen(L"MeleeUnlocked-Launcher", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
+  if (!session) return out;
+  WinHttpSetTimeouts(session, 10000, 10000, 15000, 15000);
+  if (HINTERNET connect = WinHttpConnect(session, host, u.nPort, 0)) {
+    if (HINTERNET req = WinHttpOpenRequest(connect, L"POST", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                           u.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)) {
+      const wchar_t* headers = L"Content-Type: application/x-www-form-urlencoded\r\nAccept: application/json\r\n";
+      if (WinHttpSendRequest(req, headers, (DWORD)-1, (LPVOID)body.data(), (DWORD)body.size(), (DWORD)body.size(), 0) &&
+          WinHttpReceiveResponse(req, nullptr)) {
+        DWORD status = 0, size = sizeof status;
+        WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status,
+                            &size, WINHTTP_NO_HEADER_INDEX);
+        std::string text;
+        DWORD avail = 0;
+        while (WinHttpQueryDataAvailable(req, &avail) && avail && text.size() < (1u << 20)) {
+          std::string chunk(avail, '\0');
+          DWORD got = 0;
+          if (!WinHttpReadData(req, chunk.data(), avail, &got) || !got) break;
+          text.append(chunk.data(), got);
+        }
+        out.status = (int)status;
+        out.body = std::move(text);
+      }
+      WinHttpCloseHandle(req);
+    }
+    WinHttpCloseHandle(connect);
+  }
+  WinHttpCloseHandle(session);
+  return out;
+}
 
 // The runtime folder handed to WebView2's loader. Empty means the loader finds the runtime itself, from
 // EdgeUpdate's registry record. That record can name a version folder that is gone while a newer one sits
@@ -171,6 +242,130 @@ std::wstring g_folder;
 std::atomic<HWND> g_window{nullptr};
 bool g_thread_started = false;
 
+// ---- the sign-in code's own thread (kCodeClient above)
+
+// Bumped when a code is asked for and when the sign-in window is done: an older code's thread stops.
+std::atomic<int> g_code_run{0};
+
+struct CodeNews {
+  enum Kind { kCode, kHandoff, kEnded } kind = kCode;
+  int run = 0;
+  std::string text;      // kCode: {code, where, url} as JSON; kHandoff: the hand-off; kEnded: what to tell the player
+  bool open = false;     // kCode: open the browser on the code's page
+};
+
+void news(CodeNews* n) {
+  const HWND w = g_window.load();
+  if (!w || !PostMessageW(w, WM_CODE, 0, (LPARAM)n)) delete n;
+}
+
+std::string computer_name() {
+  wchar_t name[MAX_COMPUTERNAME_LENGTH + 1] = {};
+  DWORD size = MAX_COMPUTERNAME_LENGTH + 1;
+  return GetComputerNameW(name, &size) ? narrow(name) : std::string();
+}
+
+// Asks for a code, then polls until it is approved, refused, runs out or a newer run starts (docs/DEVICE_SIGNIN.md
+// sections 1, 2 and 7). The device code and the hand-off stay in this thread's memory and the one message
+// that carries the hand-off to the view; neither is ever logged, shown or written.
+void code_flow_steps(int run, const std::string& site, bool open, const std::wstring& test_dir) {
+  const auto ended = [&](const std::string& why) {
+    auto* n = new CodeNews;
+    n->kind = CodeNews::kEnded;
+    n->run = run;
+    n->text = why;
+    news(n);
+  };
+  const auto live = [&] { return g_code_run.load() == run; };
+  const std::wstring file = test_dir.empty() ? std::wstring() : test_dir + L"\\" + wide(kCodeFile);
+  const auto drop_file = [&] {
+    if (file.empty()) return;
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+  };
+  std::string label = "Melee Unlocked";
+  if (const std::string pc = computer_name(); !pc.empty()) label += " on " + pc;
+  const Reply start = post_form(site + "/oauth/device_authorization",
+                                "client_id=" + form_value(kCodeClient) + "&scope=session&device_label=" + form_value(label));
+  const json j = json::parse(start.body, nullptr, false);
+  if (!live()) return;
+  if (start.status != 200 || !j.is_object() || !j.value("device_code", std::string()).size() ||
+      !j.value("user_code", std::string()).size()) {
+    ended(start.status == 0 ? "YouGame did not answer. Check your connection." : "Signing in with the browser is paused right now.");
+    return;
+  }
+  const std::string device = j["device_code"], user = j["user_code"];
+  std::string page = j.value("verification_uri_complete", std::string());
+  std::string where = j.value("verification_uri", std::string());
+  // Only ever a page of the site itself.
+  if (page.rfind(site + "/link", 0) != 0) page = site + "/link";
+  if (where.rfind(site + "/link", 0) != 0) where = site + "/link";
+  const size_t scheme = where.find("://");
+  if (scheme != std::string::npos) where = where.substr(scheme + 3);
+  const int expires = std::max(60, j.value("expires_in", 600));
+  int interval = std::max(5, j.value("interval", 5));
+  {
+    auto* n = new CodeNews;
+    n->kind = CodeNews::kCode;
+    n->run = run;
+    n->open = open;
+    n->text = json{{"code", user}, {"where", where}, {"url", page}}.dump();
+    news(n);
+  }
+  if (!file.empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(test_dir, ec);
+    const json f{{"verify_url", page}, {"user_code", user}, {"expires_in", expires}, {"written_by", "melee-unlocked-launcher"}};
+    const std::wstring tmp = file + L".tmp";
+    { std::ofstream out(std::filesystem::path(tmp), std::ios::binary | std::ios::trunc); out << f.dump(2); }
+    std::filesystem::rename(tmp, file, ec);
+  }
+  const uint64_t until = GetTickCount64() + (uint64_t)expires * 1000;
+  const std::string poll = "grant_type=" + form_value("urn:ietf:params:oauth:grant-type:device_code") +
+                           "&device_code=" + form_value(device) + "&client_id=" + form_value(kCodeClient);
+  for (;;) {
+    for (int waited = 0; waited < interval * 1000; waited += 250) {
+      if (!live()) { drop_file(); return; }
+      Sleep(250);
+    }
+    if (GetTickCount64() > until) { drop_file(); ended("The code ran out."); return; }
+    const Reply r = post_form(site + "/oauth/token", poll);
+    if (!live()) { drop_file(); return; }
+    const json a = json::parse(r.body, nullptr, false);
+    const std::string error = a.is_object() ? a.value("error", std::string()) : std::string();
+    if (r.status == 200 && a.is_object() && a.value("handoff", std::string()).size()) {
+      drop_file();
+      auto* n = new CodeNews;
+      n->kind = CodeNews::kHandoff;
+      n->run = run;
+      n->text = a["handoff"];
+      news(n);
+      return;
+    }
+    if (error == "authorization_pending" || r.status == 0 || r.status >= 500 || r.status == 429) {
+      if (r.status == 429 || r.status >= 500) interval = std::min(60, interval + 5);
+      continue;
+    }
+    if (error == "slow_down") { interval = std::min(60, std::max(interval + 5, a.value("interval", 0))); continue; }
+    drop_file();
+    ended(error == "access_denied" ? "The sign-in was declined." : "The code ran out.");
+    return;
+  }
+}
+
+void code_flow(int run, std::string site, bool open, std::wstring test_dir) {
+  try {
+    code_flow_steps(run, site, open, test_dir);
+  } catch (const std::exception&) {   // an answer of the wrong shape
+    if (g_code_run.load() != run) return;
+    auto* n = new CodeNews;
+    n->kind = CodeNews::kEnded;
+    n->run = run;
+    n->text = "YouGame's answer was not understood. Try again.";
+    news(n);
+  }
+}
+
 // ---- everything below runs on the view's own thread
 
 struct Engine {
@@ -185,6 +380,10 @@ struct Engine {
   int signin_check = 0;                               // the id of the sign-in check in flight, 0 none
   int next_id = 1;
   uint64_t last_use = 0, last_check = 0;
+  // Signing in with the browser (code_flow): what the bar at the foot of the sign-in page shows, as JSON
+  // ({} offers it; {busy}; {code, where, url}; {error}), and the code's page while it lasts.
+  std::string code_state = "{}";
+  std::string code_page;
 };
 Engine* g = nullptr;
 
@@ -217,6 +416,103 @@ void ask(int id, const std::string& method, const std::string& path, const std::
   g->view->ExecuteScript(wide(script).c_str(), nullptr);
 }
 
+// The bar at the foot of the sign-in page: "Use your browser", then the code and where to enter it. Drawn by
+// the launcher on the site's own page each time a page of it loads; its buttons post {mu: "code" | "open"}.
+void draw_code_bar() {
+  if (!g->signin || !g->view || current_origin() != g->signin->site) return;
+  static const char* script = R"JS((function(s){
+var b=document.getElementById('mu-yg-code');if(!document.body)return;
+if(!b){b=document.createElement('div');b.id='mu-yg-code';
+b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:10px 16px;background:#16181d;color:#d9dbe0;'+
+'font:14px/1.45 "Segoe UI",system-ui,sans-serif;text-align:center;border-top:1px solid #2a2d35';document.body.appendChild(b);}
+b.textContent='';
+function link(t,f){var a=document.createElement('button');a.textContent=t;a.style.cssText='margin-left:6px;padding:0;border:0;'+
+'background:none;color:#fff;font:inherit;font-weight:600;text-decoration:underline;cursor:pointer';
+a.onclick=function(){window.chrome.webview.postMessage(JSON.stringify({mu:f}));};return a;}
+function line(t){var p=document.createElement('div');p.textContent=t;b.appendChild(p);return p;}
+if(s.code){line('Finish signing in in your browser.').appendChild(link('Open it again','open'));
+var p=line('Or on any device, go to '+s.where+' and enter ');var c=document.createElement('b');c.textContent=s.code;
+c.style.cssText='color:#fff;letter-spacing:1px';p.appendChild(c);}
+else if(s.busy){line(s.busy);}
+else{var t=line(s.error?s.error:'Trouble signing in here?');t.appendChild(link(s.error?'Try again':'Use your browser','code'));}
+document.body.style.paddingBottom=b.offsetHeight+'px';
+}))JS";
+  g->view->ExecuteScript(wide(std::string(script) + "(" + g->code_state + ")").c_str(), nullptr);
+}
+
+// Agent test copies only (kCodeEnv): the folder the code's page is written to, an absolute path; else empty.
+std::wstring code_test_dir() {
+  wchar_t value[1024] = {};
+  const DWORD n = GetEnvironmentVariableW(wide(kCodeEnv).c_str(), value, 1024);
+  if (!n || n >= 1024) return {};
+  const std::wstring dir = value;
+  return PathIsRelativeW(dir.c_str()) ? std::wstring() : dir;
+}
+
+// Signing in with the browser: a new code (open: and the browser on its page), or the live one's page again.
+void start_code(bool open) {
+  if (!g->signin) return;
+  if (open && !g->code_page.empty()) {
+    ShellExecuteW(nullptr, L"open", wide(g->code_page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return;
+  }
+  const int run = ++g_code_run;
+  g->code_page.clear();
+  g->code_state = json{{"busy", "Getting a sign-in code..."}}.dump();
+  draw_code_bar();
+  std::thread(code_flow, run, g->signin->site, open, code_test_dir()).detach();
+}
+
+// The code was approved: its hand-off goes to the site as this view's own direct navigation (a POST from no
+// page, which the site requires), and the session it sets is this view's. The page then moves on to the site,
+// where the sign-in check finds the player signed in.
+void complete_code(const std::string& handoff) {
+  ComPtr<ICoreWebView2_2> view2;
+  ComPtr<ICoreWebView2Environment> env;
+  ComPtr<ICoreWebView2Environment2> env2;
+  ComPtr<ICoreWebView2WebResourceRequest> request;
+  const std::string body = "handoff=" + form_value(handoff);
+  IStream* stream = SHCreateMemStream((const BYTE*)body.data(), (UINT)body.size());
+  bool sent = false;
+  if (stream && SUCCEEDED(g->view.As(&view2)) && view2 && SUCCEEDED(view2->get_Environment(&env)) && env &&
+      SUCCEEDED(env.As(&env2)) && env2 &&
+      SUCCEEDED(env2->CreateWebResourceRequest(wide(g->signin->site + "/auth/device-complete").c_str(), L"POST", stream,
+                                               L"Content-Type: application/x-www-form-urlencoded", &request)) &&
+      request) {
+    g->navigating = true;
+    sent = SUCCEEDED(view2->NavigateWithWebResourceRequest(request.Get()));
+    if (!sent) g->navigating = false;
+  }
+  if (stream) stream->Release();
+  g->code_page.clear();
+  g->code_state = (sent ? json{{"busy", "Signing you in..."}} : json{{"error", "The sign-in did not finish."}}).dump();
+  if (!sent) draw_code_bar();
+}
+
+void on_code(std::unique_ptr<CodeNews> n) {
+  if (!g->signin || n->run != g_code_run.load()) return;
+  switch (n->kind) {
+    case CodeNews::kCode: {
+      const json c = json::parse(n->text, nullptr, false);
+      g->code_page = c.is_object() && c.contains("url") && c["url"].is_string() ? c["url"].get<std::string>() : std::string();
+      g->code_state = n->text;
+      if (n->open && !g->code_page.empty())
+        ShellExecuteW(nullptr, L"open", wide(g->code_page).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+      draw_code_bar();
+      break;
+    }
+    case CodeNews::kHandoff:
+      if (g->view) complete_code(n->text);
+      else g->code_state = json{{"error", "The sign-in did not finish."}}.dump();
+      break;
+    case CodeNews::kEnded:
+      g->code_page.clear();
+      g->code_state = json{{"error", n->text}}.dump();
+      draw_code_bar();
+      break;
+  }
+}
+
 // The sign-in window shows YouGame's page once a page of it has loaded; until then it draws its own
 // light "Loading YouGame..." (WM_PAINT), so a slow start never shows a black window.
 void show_page(bool on) {
@@ -240,6 +536,9 @@ void finish_sign_in(bool ok, const std::string& why) {
   if (!g->signin) return;
   std::unique_ptr<Job> job = std::move(g->signin);
   g->signin_check = 0;
+  ++g_code_run;   // a code still waiting stops (and its test file goes)
+  g->code_state = "{}";
+  g->code_page.clear();
   ShowWindow(g_window, SW_HIDE);
   show_page(false);
   job->answer(ok ? 200 : 0, why);
@@ -317,6 +616,7 @@ void on_view(ICoreWebView2Controller* controller) {
         if (g->signin) {
           // The page (or the view's own page saying it could not load) is drawn now: show it.
           if (!current_origin().empty()) show_page(true);
+          draw_code_bar();
           check_sign_in();
           return S_OK;
         }
@@ -333,6 +633,21 @@ void on_view(ICoreWebView2Controller* controller) {
   // The site's own page moved on without a load (after its sign-in form): look again.
   g->view->add_SourceChanged(Callback<ICoreWebView2SourceChangedEventHandler>(
       [](ICoreWebView2*, ICoreWebView2SourceChangedEventArgs*) { check_sign_in(); return S_OK; }).Get(), nullptr);
+  // A sign-in that would leave the site (Google and the other sign-in providers, which refuse an app's view)
+  // goes to the player's own browser instead, by code: the view stays on YouGame's page.
+  g->view->add_NavigationStarting(Callback<ICoreWebView2NavigationStartingEventHandler>(
+      [](ICoreWebView2*, ICoreWebView2NavigationStartingEventArgs* args) {
+        if (!g->signin) return S_OK;
+        LPWSTR uri = nullptr;
+        std::string to;
+        if (SUCCEEDED(args->get_Uri(&uri)) && uri) to = narrow(uri);
+        CoTaskMemFree(uri);
+        const std::string where = origin_of(to);
+        if (where.empty() || where == g->signin->site || (where.rfind("http", 0) != 0)) return S_OK;
+        args->put_Cancel(TRUE);
+        start_code(true);
+        return S_OK;
+      }).Get(), nullptr);
   g->view->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>(
       [](ICoreWebView2*, ICoreWebView2WebMessageReceivedEventArgs* args) {
         // Only a page of the site this view is on may answer.
@@ -344,6 +659,11 @@ void on_view(ICoreWebView2Controller* controller) {
         if (from.empty() || from != site || FAILED(args->TryGetWebMessageAsString(&text))) return S_OK;
         const json m = json::parse(narrow(text), nullptr, false);
         CoTaskMemFree(text);
+        // The bar at the foot of the sign-in page (draw_code_bar).
+        if (m.is_object() && m.count("mu") && m["mu"].is_string()) {
+          if (m["mu"] == "code" || m["mu"] == "open") start_code(true);   // "open": the live code's page again
+          return S_OK;
+        }
         if (!m.is_object() || !m.count("id") || !m["id"].is_number_integer()) return S_OK;
         const int id = m["id"].get<int>();
         const int status = m.value("status", 0);
@@ -365,8 +685,12 @@ void on_view(ICoreWebView2Controller* controller) {
       [](ICoreWebView2* view, ICoreWebView2NewWindowRequestedEventArgs* args) {
         LPWSTR uri = nullptr;
         args->put_Handled(TRUE);
-        if (SUCCEEDED(args->get_Uri(&uri)) && uri && g->signin) view->Navigate(uri);
+        const std::string to = uri ? narrow(uri) : std::string();
         CoTaskMemFree(uri);
+        if (!g->signin || to.empty()) return S_OK;
+        // Another site's sign-in window (Google's, say) goes to the player's browser, by code (as above).
+        if (origin_of(to) != g->signin->site) start_code(true);
+        else view->Navigate(wide(to).c_str());
         return S_OK;
       }).Get(), nullptr);
   g->view->add_ProcessFailed(Callback<ICoreWebView2ProcessFailedEventHandler>(
@@ -413,6 +737,10 @@ void take(std::unique_ptr<Job> job) {
       // A view on another page starts over on the sign-in page.
       g->signin = std::move(job);
       g->site = g->signin->site;
+      g->code_state = "{}";
+      g->code_page.clear();
+      // An agent's test copy (kCodeEnv) asks for a code at once and writes its page; no browser opens.
+      if (!code_test_dir().empty()) start_code(false);
       RECT area{0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)};
       // Placed over the launcher. A minimized launcher (it minimizes while the game runs) reports -32000,-32000,
       // which put this window off screen: then where the launcher sits when restored.
@@ -486,6 +814,10 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_JOB:
       if (w == 1) { fail_all("YouGame's browser view stopped."); destroy_view(); return 0; }
       take(std::unique_ptr<Job>((Job*)l));
+      return 0;
+    case WM_CODE:
+      if (g) on_code(std::unique_ptr<CodeNews>((CodeNews*)l));
+      else delete (CodeNews*)l;
       return 0;
     case WM_RAISE:
       if (g && g->signin && IsWindowVisible(h)) {
