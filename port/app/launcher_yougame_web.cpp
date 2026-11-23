@@ -10,6 +10,7 @@
 #include <wrl.h>
 #include <nlohmann/json.hpp>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <future>
@@ -353,7 +354,11 @@ void code_flow_steps(int run, const std::string& site, bool open, const std::wst
       if (r.status == 429 || r.status >= 500) interval = std::min(60, interval + 5);
       continue;
     }
-    if (error == "slow_down") { interval = std::min(60, std::max(interval + 5, a.value("interval", 0))); continue; }
+    if (error == "slow_down") {
+      const int asked = a.count("interval") && a["interval"].is_number_integer() ? a["interval"].get<int>() : 0;
+      interval = std::min(60, std::max(interval + 5, asked));
+      continue;
+    }
     drop_file();
     ended(error == "access_denied" ? "The sign-in was declined." : "The code ran out.");
     return;
@@ -431,7 +436,7 @@ void draw_code_bar() {
   if (!g->signin || !g->view || current_origin() != g->signin->site) return;
   static const char* script = R"JS((function(s){
 var b=document.getElementById('mu-yg-code');if(!document.body)return;
-if(!b){b=document.createElement('div');b.id='mu-yg-code';
+if(!b){b=document.createElement('div');b.id='mu-yg-code';b.className='ph-no-capture ph-sensitive';
 b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:2147483647;padding:10px 16px;background:#16181d;color:#d9dbe0;'+
 'font:14px/1.45 "Segoe UI",system-ui,sans-serif;text-align:center;border-top:1px solid #2a2d35';document.body.appendChild(b);}
 b.textContent='';
@@ -633,7 +638,8 @@ void on_view(ICoreWebView2Controller* controller) {
         if (g->signin) {
           // The page (or the view's own page saying it could not load) is drawn now: show it.
           if (!current_origin().empty()) show_page(true);
-          // The hand-off landed back on the sign-in page: it did not sign in (used, or the account refused).
+          // Where the hand-off landed: /signin/complete (or the page it sends on to, marked signed-in=app) is a
+          // sign-in; anything else (the sign-in page, a failed load, the hand-off address itself) did not sign in.
           if (g->code_handing) {
             g->code_handing = false;
             LPWSTR src = nullptr;
@@ -641,7 +647,8 @@ void on_view(ICoreWebView2Controller* controller) {
             if (SUCCEEDED(g->view->get_Source(&src)) && src) at = narrow(src);
             CoTaskMemFree(src);
             const std::string path = at.substr(std::min(at.size(), origin_of(at).size()));
-            if (path.rfind("/login", 0) == 0) g->code_state = json{{"error", "The sign-in did not finish."}}.dump();
+            const bool signed_in = ok && (path.rfind("/signin/complete", 0) == 0 || path.find("signed-in=app") != std::string::npos);
+            if (!signed_in) g->code_state = json{{"error", "The sign-in did not finish."}}.dump();
           }
           draw_code_bar();
           check_sign_in();
@@ -669,10 +676,15 @@ void on_view(ICoreWebView2Controller* controller) {
         std::string to;
         if (SUCCEEDED(args->get_Uri(&uri)) && uri) to = narrow(uri);
         CoTaskMemFree(uri);
-        const std::string where = origin_of(to);
-        if (where.empty() || where == g->signin->site || (where.rfind("http", 0) != 0)) return S_OK;
+        // Only the site itself stays in the view. Another web address goes to the browser by code; any other
+        // kind of address (file:, data:, a program's own link type) is not followed at all.
+        if (to.empty() || to == "about:blank") return S_OK;
+        std::string scheme = to.substr(0, to.find(':'));
+        for (auto& ch : scheme) ch = (char)std::tolower((unsigned char)ch);
+        const bool web = scheme == "http" || scheme == "https";
+        if (web && origin_of(to) == g->signin->site) return S_OK;
         args->put_Cancel(TRUE);
-        start_code_later(true);
+        if (web) start_code_later(true);
         return S_OK;
       }).Get(), nullptr);
   g->view->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>(
@@ -717,8 +729,9 @@ void on_view(ICoreWebView2Controller* controller) {
         CoTaskMemFree(uri);
         if (!g->signin || to.empty()) return S_OK;
         // Another site's sign-in window (Google's, say) goes to the player's browser, by code (as above).
-        if (origin_of(to) != g->signin->site) start_code_later(true);
-        else view->Navigate(wide(to).c_str());
+        const bool web = to.rfind("https://", 0) == 0 || to.rfind("http://", 0) == 0;
+        if (web && origin_of(to) == g->signin->site) view->Navigate(wide(to).c_str());
+        else if (web) start_code_later(true);
         return S_OK;
       }).Get(), nullptr);
   g->view->add_ProcessFailed(Callback<ICoreWebView2ProcessFailedEventHandler>(
