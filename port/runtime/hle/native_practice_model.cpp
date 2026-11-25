@@ -163,6 +163,27 @@ bool normalize_direct_code(const std::string& input, std::string* normalized, st
   return true;
 }
 
+bool normalize_direct_target(const std::string& input, std::string* normalized, std::string* error) {
+  if (input.find('#') != std::string::npos) return normalize_direct_code(input, normalized, error);
+  std::string out;
+  for (unsigned char ch : input) {
+    if (std::isspace(ch)) continue;
+    if (ch >= 'A' && ch <= 'Z') ch = (unsigned char)(ch - 'A' + 'a');
+    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-')) {
+      if (error) *error = "Enter a code like NAME#123";
+      return false;
+    }
+    out.push_back((char)ch);
+  }
+  if (out.empty() || out.size() > 30) {
+    if (error) *error = "Enter a code like NAME#123";
+    return false;
+  }
+  if (normalized) *normalized = out;
+  if (error) error->clear();
+  return true;
+}
+
 std::string format_search_duration(uint32_t ticks) {
   const uint32_t total_seconds = ticks / 60;
   const uint32_t minutes = total_seconds / 60;

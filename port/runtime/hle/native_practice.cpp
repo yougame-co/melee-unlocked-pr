@@ -579,7 +579,7 @@ void process_command(Command command) {
     case CommandKind::StartDirect: {
       if (g_lifecycle.phase() != Phase::Idle) return;
       std::string code, error;
-      if (!normalize_direct_code(command.text, &code, &error)) { fail(error, false); return; }
+      if (!normalize_direct_target(command.text, &code, &error)) { fail(error, false); return; }
       start_search(MatchMode::Direct, code);
       break;
     }
@@ -782,7 +782,7 @@ void enter_training_after_session(MatchMode mode, int local_index = -1, int test
     std::string error;
     const std::string last = slippi::online::direct_code_for_practice();
     if (!(g_offer_mode == MatchMode::Teams ? normalize_teams_code(last, &g_offer_code, &error)
-                                           : normalize_direct_code(last, &g_offer_code, &error))) g_offer_mode = MatchMode::None;
+                                           : normalize_direct_target(last, &g_offer_code, &error))) g_offer_mode = MatchMode::None;
   }
   g_offer_reason.clear();
   g_offer_shown = false;
@@ -870,7 +870,7 @@ bool wait_practice_possible(MatchMode* mode, std::string* code) {
   if (slippi::online::warmup_link().link_up) return false;   // connected: the warm-up room's own rules
   std::string error;
   const std::string last = slippi::online::direct_code_for_practice();
-  if (!(m == MatchMode::Teams ? normalize_teams_code(last, code, &error) : normalize_direct_code(last, code, &error))) return false;
+  if (!(m == MatchMode::Teams ? normalize_teams_code(last, code, &error) : normalize_direct_target(last, code, &error))) return false;
   *mode = m;
   return true;
 }
@@ -2442,7 +2442,7 @@ void tick() {
     if (lr_ticks == 20 && (lr_mode == MatchMode::Direct || lr_mode == MatchMode::Teams)) {
       std::string error;
       const std::string last = slippi::online::direct_code_for_practice();
-      if (!(lr_mode == MatchMode::Teams ? normalize_teams_code(last, &lr_code, &error) : normalize_direct_code(last, &lr_code, &error))) {
+      if (!(lr_mode == MatchMode::Teams ? normalize_teams_code(last, &lr_code, &error) : normalize_direct_target(last, &lr_code, &error))) {
         host::log("native practice: L+R on the Direct character select with no code to search for");
         lr_ticks = 21;
       }

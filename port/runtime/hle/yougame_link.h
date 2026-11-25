@@ -182,6 +182,7 @@ struct Identity {
   std::string player_id;   // this game's player id for the signed-in account (the room's player id)
   std::string name;        // display name, as the room shows it to opponents
   std::string code;        // connect code, "TAG#123"; empty when YouGame has not assigned one
+  std::string username;    // the YouGame username (mpCode's username); empty from a YouGame that sends none
   std::string error;       // why there is no identity (signed out, the app is not answering)
 };
 // The signed-in YouGame player, from a cache: never blocks (the game thread reads it every frame
@@ -194,6 +195,22 @@ void refresh_identity();
 // total (the online menu's status query at boot: answered before the identity arrived, the menus
 // would draw Slippi's "log in" screen; a slow app must not stall the game thread again and again).
 Identity wait_identity(int ms);
+
+// The player's YouGame friends (the SDK's friendsList), for Direct's list, from a cache: never blocks.
+// The first call asks in the background; a call once the answer is 30 s old (60 s after a refusal) asks
+// again. Asked only where Direct searches YouGame (a YouGame row under Melee Unlocked's launcher, or a
+// copy beside the app on its local channel): a copy the app started plays Direct on Slippi. ok false:
+// no list (not asked yet, not signed in, or a host without friendsList); Direct then offers the code only.
+struct Friend {
+  std::string username;   // what Direct searches for (mpTicket direct)
+  std::string name;       // the display name; empty when YouGame gave none
+  bool online = false, here = false, playing = false;   // here: in this game now
+};
+struct FriendList {
+  bool ok = false;
+  std::vector<Friend> friends;   // in this game first, then online, then the rest
+};
+FriendList friend_list();
 
 // Private native-game CPU bracket bridge (mu_tourney.h). No-op outside a YouGame launch.
 bool tournament_active();

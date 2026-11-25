@@ -153,6 +153,11 @@ void lines_and_pushes() {
   CHECK(!channel::invite_to_app("mpTicket", true, false, true, true));
   CHECK(!channel::invite_to_app("mpFriend", true, false, false, true));  // no channel
   CHECK(!channel::invite_to_app("mpFriend", true, false, true, false));  // another player in the app
+  // Direct's friends list: the app's for the launcher's own player, or with the app's sign-in; else the launcher's.
+  CHECK(channel::friends_from_app(true, true, false));
+  CHECK(channel::friends_from_app(true, false, true));
+  CHECK(!channel::friends_from_app(true, false, false));  // another player in the app
+  CHECK(!channel::friends_from_app(false, true, true));   // no channel
   // The launcher not signed in, the app's channel naming a player (app_sign_in): matches go over the app's channel.
   // Its own questions stay with the launcher (its sign-in is asked first every time), and with the channel down
   // everything is the launcher's again.

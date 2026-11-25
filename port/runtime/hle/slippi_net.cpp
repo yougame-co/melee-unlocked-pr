@@ -3127,6 +3127,12 @@ bool Matchmaking::youGameSearch(yougame::Search* search) {
                                          !search_settings_.friend_room.empty());
   search->squad_budget = search->squad ? search_settings_.squad_budget : std::string();
 #endif
+  // A friend picked by username (Direct's list): YouGame takes it as it is in mpTicket's direct.
+  if (search->mode == 2 && search_settings_.direct_username) {
+    search->direct_code = search_settings_.connect_code;
+    search->friend_room = search_settings_.friend_room;
+    return true;
+  }
   // Direct and Teams require a readable code; unused fields must still be valid UTF-8.
   std::string code;
   if (!yougame::friends::search_code(search->mode, search_settings_.connect_code, &code)) {

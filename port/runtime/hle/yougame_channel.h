@@ -149,6 +149,12 @@ inline bool invite_to_app(const std::string& type, bool has_room, bool hold, boo
   if (!channel_up || !same_player) return false;
   return type == "mpRoom" || (type == "mpFriend" && has_room && !hold);
 }
+// The hybrid's friends list (Direct's list, friendsList): the launcher has none, so the app's channel answers it
+// while the app plays as the launcher's own player (or the hybrid plays with the app's sign-in). Another player
+// in the app, or no channel: the launcher's bridge answers (it says unsupported, and Direct offers the code only).
+inline bool friends_from_app(bool channel_up, bool same_player, bool app_sign_in) {
+  return channel_up && (same_player || app_sign_in);
+}
 // Whose YouGame sign-in the hybrid plays with: the launcher's whenever it names a player (play never depends on the
 // app); with none, the app's while its channel is up and names a player; else nobody (the rows stay closed, and an
 // app that is up but signed out offers its sign-in: sign_in_needed()).

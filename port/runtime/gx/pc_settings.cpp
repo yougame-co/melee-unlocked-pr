@@ -4818,6 +4818,9 @@ static void draw_native_practice(SettingsState& state, RenderOptions& options,
     f.search.opponent = practice.opponent;
     f.search.code = practice.connect_code;
     f.search.offer = practice.offer;
+    // Direct's friends: asked only while the menu is open where Direct can be searched (never blocks).
+    if (state.practice_open && practice.tab_available)
+      for (const auto& fr : yougame::friend_list().friends) f.friends.push_back({fr.username, fr.name, fr.online, fr.here, fr.playing});
     {
       // The warm-up room's panel: in Training, and anywhere else offline the player went from there
       // (stage 2, slippi::warmup::Stage::Away: any mode, its selects and matches, the menus).
@@ -4869,7 +4872,8 @@ static void draw_native_practice(SettingsState& state, RenderOptions& options,
       std::string code, error;
       if (!practice.can_start) practice_menu::show_error("Search from Training or an event match.");
       else if (r.start_teams ? slippi::native_practice::normalize_teams_code(r.direct_code, &code, &error)
-                             : slippi::native_practice::normalize_direct_code(r.direct_code, &code, &error)) {
+               : r.direct_friend ? slippi::native_practice::normalize_direct_target(r.direct_code, &code, &error)
+                                 : slippi::native_practice::normalize_direct_code(r.direct_code, &code, &error)) {
         if (r.start_teams) slippi::native_practice::submit_start_teams(code);
         else slippi::native_practice::submit_start_direct(code);
         close_menu();

@@ -55,6 +55,12 @@ struct Warmup {
   } fighter[4];
 };
 
+// One of the player's YouGame friends, for Direct's list (yougame::friend_list).
+struct Friend {
+  std::string username, name;   // name: the display name, "" when not known
+  bool online = false, here = false, playing = false;   // here: in this game now
+};
+
 struct Frame {
   float display_w = 0, display_h = 0;
   float game_x0 = 0, game_y0 = 0, game_x1 = 0, game_y1 = 0;   // the game picture in the window
@@ -67,6 +73,7 @@ struct Frame {
   bool hint = false;            // closed: show how to open it
   bool intro = false;           // never opened yet: the banner first, then only the corner hint
   Search search;
+  std::vector<Friend> friends;  // Direct's list (in this game first); empty: Direct asks for a code, as before
   Warmup warmup;
   double time = 0;              // seconds, for animation and key repeat
   uint32_t unlocked = 0xFFFFFFFFu;   // characters the memory card has (a bit per character kind)
@@ -82,6 +89,7 @@ struct Result {
   bool open_window = false;      // "All settings": the full Practice window
   bool stronger_changed = false; // "Stronger Pro AI" became Always or Never: save it (phillip_ai::stronger_choice)
   bool pro_reaction_changed = false;   // the Pro AI's added reaction changed: save it (phillip_ai::extra_delay)
+  bool direct_friend = false;    // start_direct for a friend from the list: direct_code is their YouGame username
   std::string direct_code;
 };
 

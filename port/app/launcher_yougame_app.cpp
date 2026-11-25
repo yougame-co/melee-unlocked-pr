@@ -319,11 +319,13 @@ Answer ask_direct(bool staging, const std::string& version, int timeout_ms) {
   return run(staging, version, timeout_ms, [](const Request& request, Answer& out) {
     if (out.state == Answer::kSignedIn) {
       // The connect code, asked as the game asks it; accountSwitching: again after its retryAfter, twice at most.
+      std::string username;   // the YouGame username; older apps send only the code
       for (int attempt = 0; attempt < 3; ++attempt) {
         const json code = request({{"type", "mpCode"}}, 8000);
         if (code.is_object() && code.value("ok", false)) {
           const json r = code.count("result") && code["result"].is_object() ? code["result"] : json::object();
           if (r.count("code") && r["code"].is_string()) out.code = r["code"];
+          if (r.count("username") && r["username"].is_string()) username = r["username"];
           break;
         }
         const std::string c = code.is_object() && code.count("code") && code["code"].is_string() ? code["code"].get<std::string>() : "";
@@ -332,7 +334,8 @@ Answer ask_direct(bool staging, const std::string& version, int timeout_ms) {
         std::this_thread::sleep_for(std::chrono::milliseconds(channel::retry_after_ms(code)));
       }
       if (out.state == Answer::kSignedIn && out.name.empty())
-        out.name = out.code.empty() ? std::string("Player") : out.code.substr(0, out.code.find('#'));
+        out.name = !username.empty() ? username
+                 : out.code.empty() ? std::string("Player") : out.code.substr(0, out.code.find('#'));
     }
   });
 }

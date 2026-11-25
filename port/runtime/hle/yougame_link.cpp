@@ -334,6 +334,9 @@ void restore_bridge_for_restart() {
 }
 std::atomic<bool> g_app_same_player{false};   // hybrid: the app's channel names the launcher's own player (identity())
 bool routed_to_bridge(const json& body) {
+  // The hybrid's friends list is the app's, and only for the launcher's own player (channel::friends_from_app).
+  if (g_match_bridge && body.is_object() && body.value("type", std::string()) == "friendsList")
+    return !channel::friends_from_app(g_channel_up.load(), g_app_same_player.load(), g_app_sign_in.load());
   if (g_match_bridge && body.is_object() &&
       channel::invite_to_app(body.value("type", std::string()), body.count("room") && body["room"].is_string(),
                              body.value("hold", json()) == true, g_channel_up.load(), g_app_same_player.load()))
@@ -2224,6 +2227,8 @@ Identity fetch_identity(const std::function<bool()>& cancelled = nullptr) {
         if (via_channel) host::log("yougame channel: mpCode answered %llu ms ok", (unsigned long long)since_probe());
         if ((cancelled && cancelled()) || search_stopped()) return id;
         id.code = code.value("code", "");
+        // The YouGame username (a YouGame older than this field sends only the code).
+        if (code.count("username") && code["username"].is_string()) id.username = code["username"];
       } catch (const std::exception& e) {
         if (via_channel)
           host::log("yougame channel: mpCode answered %llu ms %s", (unsigned long long)since_probe(),
@@ -2252,9 +2257,12 @@ Identity fetch_identity(const std::function<bool()>& cancelled = nullptr) {
     }
     id.ok = !id.player_id.empty();
     if (!id.ok) id.error = "Sign in to YouGame to play online";
-    // Until the player shares their name with this game the SDK calls them "Player"; the tag of
-    // their connect code is their own (made from their YouGame name) and reads better online.
-    if (id.ok && !hello.value("nameShared", false) && !id.code.empty()) id.name = id.code.substr(0, id.code.find('#'));
+    // Until the player shares their name with this game the SDK calls them "Player": their YouGame
+    // username reads better online, else the tag of their connect code (made from their YouGame name).
+    if (id.ok && !hello.value("nameShared", false)) {
+      if (!id.username.empty()) id.name = id.username;
+      else if (!id.code.empty()) id.name = id.code.substr(0, id.code.find('#'));
+    }
   } catch (const std::exception& e) {
     id.error = e.what();
   }
@@ -4343,6 +4351,64 @@ Identity wait_identity(int ms) {
   }
 }
 
+// ------------------------------------------------------------------ Direct's friends list
+std::mutex g_friends_mutex;
+FriendList g_friends;
+uint64_t g_friends_at = 0;   // when the last answer (or refusal) came; 0 never
+std::atomic<bool> g_friends_asking{false};
+
+// friendsList's result: the friends with a username Direct can search for, in this game first, then
+// online, then the rest (each group in YouGame's own order). Requests to and from the player are not friends.
+FriendList friends_from(const json& result) {
+  FriendList out;
+  const json list = result.is_object() && result.count("friends") && result["friends"].is_array() ? result["friends"] : json::array();
+  for (const json& f : list) {
+    if (!f.is_object() || !f.count("username") || !f["username"].is_string()) continue;
+    const std::string username = f["username"];
+    if (username.empty() || username.size() > 30 ||
+        username.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos) continue;
+    Friend one;
+    one.username = username;
+    if (f.count("name") && f["name"].is_string()) one.name = f["name"].get<std::string>().substr(0, 64);
+    one.online = f.value("online", false) == true;
+    one.here = f.value("here", false) == true;
+    one.playing = f.value("playing", false) == true;
+    out.friends.push_back(one);
+    if (out.friends.size() >= 100) break;
+  }
+  std::stable_sort(out.friends.begin(), out.friends.end(), [](const Friend& a, const Friend& b) {
+    const int ra = a.here ? 0 : a.online ? 1 : 2, rb = b.here ? 0 : b.online ? 1 : 2;
+    return ra < rb;
+  });
+  out.ok = true;
+  return out;
+}
+
+FriendList friend_list() {
+  // Direct searches YouGame only for a YouGame row away from the app's own launch (as Matchmaking routes it).
+  if (active() || !session()) return {};
+  std::lock_guard<std::mutex> lock(g_friends_mutex);
+  const uint64_t age = GetTickCount64() - g_friends_at;
+  if ((!g_friends_at || age > (g_friends.ok ? 30000u : 60000u)) && !g_friends_asking.exchange(true)) {
+    std::thread([] {
+      FriendList got;
+      try {
+        got = friends_from(bridge({{"type", "friendsList"}}, 8000));
+        host::log("yougame: friends list: %zu", got.friends.size());
+      } catch (const std::exception& e) {
+        host::log("yougame: no friends list: %s", channel::log_text(e.what()).c_str());
+      }
+      {
+        std::lock_guard<std::mutex> lock(g_friends_mutex);
+        g_friends = got;   // a refusal (signed out, another account) shows no list until the next answer
+        g_friends_at = GetTickCount64();
+      }
+      g_friends_asking = false;
+    }).detach();
+  }
+  return g_friends;
+}
+
 // Native game's private CPU-bracket command. The site's SDK remains the only request path.
 bool tournament_active() { return g_tourney_launched.load(); }
 // All SDK traffic runs off the simulation thread. The policy reserves each request
@@ -4967,7 +5033,9 @@ Match find_match(const Search& search, const std::function<bool()>& cancel_reque
   }
   // Unranked keeps its two players together for the next game, as Slippi's unranked does.
   if (search.mode == 1) request["afterMatch"] = "stay";
-  if (!friends_mode && direct) request["direct"] = search.direct_code;
+  // A friend picked by username goes as "@name", so it never reads as a connect code typed without its "#".
+  if (!friends_mode && direct)
+    request["direct"] = search.direct_code.find('#') == std::string::npos ? "@" + search.direct_code : search.direct_code;
   if (lobby_route) request = json::object();   // set with the ticket below (lobby_hold or lobby_ticket)
   // The queue's ticket admits this player to the match room; a renewal there asks for a match-admission
   // ticket (Teams, teamsLobby 1, 4 players, casual, the same key; no room, party or partySearch).
@@ -6403,7 +6471,9 @@ Match find_match(const Search& search, const std::function<bool()>& cancel_reque
     player.name = player.local ? me.name : p.value("name", "Player");
     // In Direct the room admits only the account behind the code we typed: that code is the
     // opponent's. Elsewhere the code is what the opponent sent, shown as theirs.
-    player.code = player.local ? me.code : direct && !friends_mode ? search.direct_code : cands[conn].value("code", "");
+    // A friend picked by username: the code is the one the opponent sent.
+    const bool by_code = search.direct_code.find('#') != std::string::npos;
+    player.code = player.local ? me.code : direct && !friends_mode && by_code ? search.direct_code : cands[conn].value("code", "");
     for (auto& peer : peers) if (peer.port == player.port) player.address = addr_string(peer.chosen);
     out.players.push_back(player);
   }

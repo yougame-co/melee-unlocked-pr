@@ -317,7 +317,7 @@ std::string active_pro(const MuPcConfig& c) {
 
 enum class Page : int {
   Root, Queue, Code, Blocked, Cpu, Moves, Attacks, Defense, Oos, Hit, Di, Tech, Getup, After, Ledge, Tools,
-  Presets, Setups, Replay, ReplaySettings, Ghosts, Jumps, Throws, Stronger, Count
+  Presets, Setups, Replay, ReplaySettings, Ghosts, Jumps, Throws, Stronger, Friends, Count
 };
 // The character select's number for a character name (a ghost's character), or -1.
 int css_kind_of(const char* name) {
@@ -355,6 +355,7 @@ const char* page_title(Page p) {
     case Page::Stronger: return "Stronger Pro AI";
     case Page::Jumps: return "Jumps";
     case Page::Throws: return "Throws";
+    case Page::Friends: return "Direct";
     default: return "";
   }
 }
@@ -372,8 +373,11 @@ enum Action : int {
   kActTeams = 500, kActBlocked = 600, kActWarmupBack = 650, kActWarmupAdjust = 651, kActGhostOff = 652,
   // "Stronger Pro AI (Requires additional download)": the question after picking a pro, and the
   // Fight a pro page's own download row.
-  kActStrongerYes = 700, kActStrongerNotNow, kActStrongerAlways, kActStrongerNever, kActStrongerAll
+  kActStrongerYes = 700, kActStrongerNotNow, kActStrongerAlways, kActStrongerNever, kActStrongerAll,
+  // Direct's list: a friend (kActFriend + their place in the list), then typing a code.
+  kActDirectCode = 790, kActFriend = 800
 };
+constexpr int kFriendRows = 12;   // friends Direct lists (a screen's worth)
 
 struct Row {
   Kind kind = Kind::Info;
@@ -616,13 +620,28 @@ std::vector<Row> rows_for(Page p) {
       } else {
         rows.push_back(action_row("Unranked", kActUnranked, "", s.can_start ? "Search now. Keep training; the match starts by itself."
                                                                            : "Search from Training or an event match.", s.can_start));
-        rows.push_back(page_row("Direct", Page::Code, g_last_direct, "Play someone by their connect code."));
+        // With friends: their list first (Page::Friends), the code last; without: straight to the code, as before.
+        rows.push_back(page_row("Direct", g_f.friends.empty() ? Page::Code : Page::Friends, g_last_direct,
+                                g_f.friends.empty() ? "Play someone by their connect code."
+                                                    : "Play a friend, or someone by their connect code."));
         rows.push_back(action_row("Teams", kActTeams, g_last_teams, "Two against two: all four enter the same connect code."));
         int n = 0;
         for (const std::string& code : slippi::online::config().blocked_codes) n += code.empty() ? 0 : 1;
         char b[24]; std::snprintf(b, sizeof b, n ? "%d codes" : "None", n);
         rows.push_back(page_row("Skip in Unranked", Page::Blocked, b, "Codes you do not want to play in Unranked."));
       }
+      break;
+    case Page::Friends:
+      for (int i = 0; i < (int)g_f.friends.size() && i < kFriendRows; ++i) {
+        const Friend& fr = g_f.friends[(size_t)i];
+        const std::string at = "@" + fr.username;
+        const std::string label = fr.name.empty() ? at : fr.name + "  " + at;
+        const char* where = fr.here ? " is playing Melee Unlocked now." : fr.playing ? " is playing another game."
+                          : fr.online ? " is online." : " is offline.";
+        rows.push_back(action_row(label.c_str(), kActFriend + i, fr.here ? "Here" : fr.online ? "Online" : "",
+                                  (at + where + " The match starts when they pick you too.").c_str()));
+      }
+      rows.push_back(action_row("Enter a code", kActDirectCode, g_last_direct, "Play someone by their connect code."));
       break;
     case Page::Blocked:
       for (int i = 0; i < 3; ++i) {
@@ -1095,6 +1114,14 @@ void press(Page p, Row& r, Result& out) {
   }
   if (r.action >= kActSave && r.action < kActSave + 100) { practice_cpu::set_slot(r.action - kActSave, g_c); out.changed = true; return; }
   if (r.action == kActTeams) { open_keyboard(4, g_last_teams); return; }
+  if (r.action == kActDirectCode) { open_keyboard(0, g_last_direct); return; }
+  if (r.action >= kActFriend && r.action < kActFriend + kFriendRows && r.action - kActFriend < (int)g_f.friends.size()) {
+    // The same Direct search a typed code starts, for the friend's username (mpTicket direct takes either).
+    out.start_direct = true;
+    out.direct_friend = true;
+    out.direct_code = g_f.friends[(size_t)(r.action - kActFriend)].username;
+    return;
+  }
   if (r.action >= kActBlocked && r.action < kActBlocked + 3) {
     open_keyboard(1 + r.action - kActBlocked, slippi::online::config().blocked_codes[r.action - kActBlocked]);
     return;

@@ -56,6 +56,9 @@ class Lifecycle {
 // player name is upper-cased. Returns false with a user-facing reason when the input is invalid.
 bool normalize_direct_code(const std::string& input, std::string* normalized, std::string* error);
 bool normalize_teams_code(const std::string& input, std::string* normalized, std::string* error);
+// Direct's opponent: a connect code (NAME#123, as normalize_direct_code), or without a # a YouGame username
+// (a friend picked from Direct's list): 1 to 30 of a-z, 0-9 and -, upper case folded to lower.
+bool normalize_direct_target(const std::string& input, std::string* normalized, std::string* error);
 // Formats a 60 Hz search-tick count for the render snapshot without using wall-clock time.
 std::string format_search_duration(uint32_t ticks);
 // Only transition/failure phases that must suppress guest input force global capture. Returning to

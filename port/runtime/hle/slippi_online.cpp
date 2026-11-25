@@ -335,6 +335,9 @@ Matchmaking::MatchSearchSettings g_last_search;
 // whole word for the match (a player id, longer than the 18 bytes a typed code gets).
 struct ArenaNext { std::vector<std::string> fighters; std::string code; bool ffa = false; } g_arena_next;
 bool g_arena_ffa_next = false;   // the next search is an arena free-for-all (arena_start_search)
+// The next Direct search's opponent is a YouGame username (a friend picked from Direct's list in the Practice
+// menu), not a connect code: too long for the find payload's 18 bytes, and never folded to upper case.
+std::string g_direct_username_next;
 // The 4-player Friends lobby (yougame_lobby.h) on the 4-door select: armed by the Friends row (the host
 // holds a room) or an accepted lobby invite (a guest joins its room), until the player leaves it (LEAVE).
 // One Control lasts the whole lobby, across its matches. closed: its search failed or its room closed
@@ -1298,6 +1301,8 @@ int g_older_offer_mode = -1;   // YouGame is on an older release: the mode Start
 std::atomic<bool> g_friends_css{false};
 
 void start_find_match(const uint8_t* payload, const std::string& friend_room = {}) {
+  std::string direct_username;
+  direct_username.swap(g_direct_username_next);   // this search's only: never carried to a later one
   if (!friend_room.empty()) g_friends_css = true;
   Matchmaking::MatchSearchSettings search;
   search.mode = (Matchmaking::OnlinePlayMode)payload[0];
@@ -1348,18 +1353,23 @@ void start_find_match(const uint8_t* payload, const std::string& friend_room = {
     // stays out of the recent codes, and a pending Discord join is left for the player's own Direct.
     search.arena_fighters = arena.fighters;
     sj = arena.code;
-  } else if (search.mode == Matchmaking::DIRECT && discord_join_pending()) {
+  } else if (search.mode == Matchmaking::DIRECT && direct_username.empty() && discord_join_pending()) {
     // Choosing Direct after accepting a Discord Join means join that sender. Use the queued code
     // even if the game's text field still contains its old value; the user need not retype/paste it.
     const std::string invite_sj = utf8_to_shiftjis(g_discord_join_code);
     sj.assign(invite_sj.begin(), invite_sj.begin() + std::min<size_t>(invite_sj.size(), 18));
     g_discord_join_code.clear();
   }
-  if (arena.fighters.empty()) {
+  if (search.mode == Matchmaking::DIRECT && arena.fighters.empty() && sj.empty() && !direct_username.empty()) {
+    // A friend's username (ASCII, so the same bytes in Shift-JIS): searched as it is, kept out of the
+    // recent codes (they are connect codes), and the last search's word for Practice's offer to search again.
+    search.connect_code = direct_username;
+    search.direct_username = true;
+  } else if (arena.fighters.empty()) {
     if (search.mode == Matchmaking::DIRECT) g_direct_codes->AddOrUpdateCode(shiftjis_to_utf8(sj));
     else if (search.mode == Matchmaking::TEAMS && friend_room.empty()) g_teams_codes->AddOrUpdateCode(shiftjis_to_utf8(sj));
   }
-  search.connect_code = sj;
+  if (!search.direct_username) search.connect_code = sj;
   search.friend_room = friend_room;
 #if MU_SQUAD
   // Based on Squad Strike by Chris (x9x9x9x9x9), https://github.com/x9x9x9x9x9/squad-strike v1.0.0, used with the author's permission (11-03-2026)
@@ -2946,8 +2956,19 @@ bool native_start_match(int mode, const std::string& connect_code, uint8_t chara
   set_match_selections(selections);
   uint8_t find[19] = {};
   find[0] = (uint8_t)mode;
-  const std::string sjis = utf8_to_shiftjis(connect_code);
-  std::memcpy(find + 1, sjis.data(), std::min<size_t>(18, sjis.size()));
+  if (mode == (int)Matchmaking::DIRECT && friend_room.empty() && !connect_code.empty() &&
+      connect_code.find('#') == std::string::npos) {
+    // A friend picked by YouGame username: only YouGame's Direct finds one (Matchmaking routes Direct there
+    // for a YouGame row away from the app's own launch; the app's Direct is Slippi's, by connect code).
+    if (yougame::active() || !yougame::session()) {
+      if (error) *error = "Enter a code like NAME#123";
+      return false;
+    }
+    g_direct_username_next = connect_code;
+  } else {
+    const std::string sjis = utf8_to_shiftjis(connect_code);
+    std::memcpy(find + 1, sjis.data(), std::min<size_t>(18, sjis.size()));
+  }
   start_find_match(find, friend_room);
   if (!g_forced_error.empty()) {
     if (error) *error = g_forced_error;

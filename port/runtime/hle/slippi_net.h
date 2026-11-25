@@ -600,6 +600,9 @@ class Matchmaking {
     bool friends_lobby = false;
     std::string lobby_room;
     std::shared_ptr<yougame::lobby::Control> lobby_control;
+    // Direct for a friend picked by YouGame username: connect_code holds the username (a-z, 0-9, -), sent
+    // to YouGame as it is. Only YouGame's Direct searches for one.
+    bool direct_username = false;
 #if MU_SQUAD
     // Based on Squad Strike by Chris (x9x9x9x9x9), https://github.com/x9x9x9x9x9/squad-strike v1.0.0, used with the author's permission (11-03-2026)
     bool squad = false;
