@@ -925,8 +925,10 @@ json bridge(const json& body, int timeout_ms = 15000, const std::function<bool()
     const auto& refused = update::refusal(j);
     if (update::required(refused)) {
       g_bridge_refusal = "update_required";
+      const std::string superseded = update::superseded_test_text(refused);
       g_bridge_update_text = update::listed_newer(refused, build_version()) ? update::error_text(j)
-                                                                            : update::not_listed_text(build_version());
+                             : !superseded.empty() ? superseded
+                                                   : update::not_listed_text(build_version());
       if ((cancelled && cancelled()) || search_stopped()) throw std::runtime_error("Cancelled");
       if (!search_stopped()) {
         g_update_notice.refuse();

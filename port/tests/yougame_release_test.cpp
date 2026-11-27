@@ -97,6 +97,10 @@ int main() {
   CHECK(!update::listed_newer({{"code", "update_required"}}, "1.0.1"));
   CHECK(update::listed_newer({{"code", "update_required"}, {"current", "1.0.2"}}, "1.0.1"));
   CHECK(update::not_listed_text("1.0.1").find("does not list Melee Unlocked 1.0.1") != std::string::npos);
+  CHECK(update::superseded_test_text({{"code", "update_required"}, {"current", "1.0.33-test.86b26d6"}})
+            .find("newer test build of Melee Unlocked is out (1.0.33-test.86b26d6)") != std::string::npos);
+  CHECK(update::superseded_test_text({{"code", "update_required"}, {"current", "1.0.34"}}).empty());
+  CHECK(update::superseded_test_text({{"code", "update_required"}}).empty());
   int versions = 0;
   for (const char* v : {"0.9.81", "0.10.0", "1.0.0", "0.9.80.1", "000.009.081", "0.9.1000000000000000000000000000000"}) {
     CHECK(update::newer(v, "0.9.80"));

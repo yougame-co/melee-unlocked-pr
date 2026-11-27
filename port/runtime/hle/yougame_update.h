@@ -109,6 +109,14 @@ inline std::string not_listed_text(const std::string& ours) {
   return "YouGame does not list Melee Unlocked " + ours + system +
          " yet, so its modes cannot start here. They open once YouGame adds it. Slippi modes work now.";
 }
+// An update_required naming a test build (x.y.z-test.<commit>) other than this one: this is a test build that a
+// newer one on its branch replaced, not a version YouGame has yet to list. Said so (quality appwalk17, 11-27).
+inline std::string superseded_test_text(const nlohmann::json& refused) {
+  const std::string listed = current(refused);
+  if (listed.find("-test.") == std::string::npos) return {};
+  return "A newer test build of Melee Unlocked is out (" + listed +
+         "). Open it from the game's page on YouGame to play online.";
+}
 // Only positively identified idle scenes may hand back. Unknown scenes stay conservative.
 inline bool idle_scene(uint32_t major, uint32_t minor) {
   // GameModeKind (melee/gm/forward.h): 0x00 GM_TITLE, 0x01 GM_MENU (main and Online menus).
