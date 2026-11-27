@@ -475,6 +475,7 @@ host::controller_relay::Snapshot relayed_controllers() {
   return relay_pads::controller_snapshot(relay_pads::game_frame);
 }
 
+void site_left_friend_room();   // after close_room
 void handle_app_line(const std::string& line) {
   if (g_update_notice.command(line)) {
     const auto id = g_update_notice.take_ready_log();
@@ -534,10 +535,14 @@ void handle_app_line(const std::string& line) {
 #ifdef MELEE_DOUBLES
         doubles::ui.back_if_active();
 #endif
-        friends::lobby.leave(); console::entry.stop(); } // no-op outside a held room
+        friends::lobby.leave(); console::entry.stop();   // no-op outside a held room
+        site_left_friend_room();
+      }
       if (!g_stdio && g_channel_allowed) { sign_in_push(push); update_push(push); }   // sign-in's pushes, gameUpdate
       const bool taken = friends::events.push(push, now_ms());
       if (taken && friends::version_reason(push)) log_friend_version();
+      else if (!taken && push.value("type", "") == "join")
+        host::log("friends: join %s ignored (%s)", friends::room(push).c_str(), friends::events.ignored());
       // Receipt only (no names or text): proves the app's notice reached the game, shown or not.
       else if (push.value("type", "") == "notice")
         host::log("friends: notice %.16s %s", friends::text(push, "kind", 16).c_str(), taken ? "shown" : "ignored");
@@ -1590,6 +1595,9 @@ std::unique_ptr<Room> g_room;
 // The Friends lobby's room between matches (g_mutex): its pump keeps the lobby current and runs the screen's
 // intents, its links stay up. Only the lobby's next search takes it; any other close leaves it.
 std::unique_ptr<Room> g_parked_lobby;
+// A 1v1 Friends room whose other player quit (g_mutex): the socket stays open, with its pump, so the room keeps
+// this player's seat for the friend's return or a fresh invite. Closed (leave + close) when the player moves on.
+std::unique_ptr<Room> g_parked_friend;
 // The arena's room between games (g_mutex), with its own pump. g_arena_open: the arena still wants it (a game's
 // room handed back after close() shuts down instead); g_arena_parking: a game's room is on its way back.
 std::unique_ptr<Room> g_arena;
@@ -1864,6 +1872,25 @@ void park_arena(std::unique_ptr<Room> old) {
   }
   if (!keep) shutdown_room(std::move(fresh));
 }
+// Closes the parked 1v1 Friends room, if any. A rejoin of that same room closes the socket quietly, without
+// the room's leave, so Rooms holds the seat for the fresh ticket and socket (and waits, so the old socket is
+// gone before the new one opens); anything else leaves the room. wait: the caller needs it gone (game exit).
+void close_parked_friend(const char* why, const std::string& rejoin = {}, bool wait = false) {
+  std::unique_ptr<Room> r;
+  { std::lock_guard<std::mutex> lock(g_mutex); r = std::move(g_parked_friend); }
+  if (!r) return;
+  const bool same = !rejoin.empty() && rejoin == r->code;
+  host::log("friends: parked room closed (%s)", same ? "rejoining it" : why);
+  auto finish = [same](std::unique_ptr<Room> old) {
+    if (!same) { shutdown_room(std::move(old)); return; }
+    old->stop = true;
+    if (old->pump.joinable()) old->pump.join();
+    end_links(*old);
+    if (old->socket) old->socket->close();
+  };
+  if (wait || same) finish(std::move(r));
+  else std::thread([finish, old = std::move(r)]() mutable { finish(std::move(old)); }).detach();
+}
 // Takes the room out of the session at once and leaves it on another thread: the online cleanup
 // runs on the game thread, and a search that starts right after must not find the old room.
 // Ranked (yougame_ranked.h Set): a quitter concedes; a player whose opponent's connection broke
@@ -1901,6 +1928,19 @@ uint64_t close_room(Leave why) {
       if (g_parked_lobby) std::thread([old = std::move(g_parked_lobby)]() mutable { shutdown_room(std::move(old)); }).detach();
       g_parked_lobby = std::move(g_room);
       host::log("friends lobby: back to the select%s; the room stays", why == Leave::Lost ? " (a connection dropped)" : "");
+      return g_search_generation.value();
+    }
+    // A 1v1 Friends room whose other player quit (the link went, Lost): the room stays, parked, and the player
+    // is back on the Friends screen. Its socket is not left, so the friend (or an invite) finds the room as it
+    // was; the next search, the menus left, the site's leave or the game's exit close it (close_parked_friend).
+    // Ranked/queue rooms, the arena, Doubles and the 4-seat lobby keep their own endings above and below.
+    if (why == Leave::Lost && g_room && g_room->friends && !g_room->ranked && !g_room->lobby_session &&
+        !g_room->doubles_match && !g_room->arena && g_room->size == 2 && g_room->socket && !g_room->socket->closed()) {
+      g_search_generation.begin();
+      friends::events.current_room({});   // retired: a new invite into it is taken, a repeat is not
+      if (g_parked_friend) std::thread([old = std::move(g_parked_friend)]() mutable { shutdown_room(std::move(old)); }).detach();
+      g_parked_friend = std::move(g_room);
+      host::log("friends: the other player left; the room stays (parked)");
       return g_search_generation.value();
     }
     if (why == Leave::Next && !g_room) {   // the lobby's own next search: the parked room is its
@@ -1982,6 +2022,26 @@ uint64_t close_room(Leave why) {
 #endif
     }).detach();
     return g_search_generation.value();
+  }
+}
+
+// The site's {"cmd":"leave"} (Leave lobby on the page): the game lets the room go at once, so an invite into
+// it later starts fresh. A 1v1 Friends room in play or held closes; the parked one closes too. Ranked, queue,
+// arena and Doubles rooms are not the page's lobby and stay.
+void site_left_friend_room() {
+  close_parked_friend("left on the site");
+  bool friend_room, none;
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    none = !g_room;
+    friend_room = g_room && g_room->friends && !g_room->ranked && !g_room->lobby_session &&
+                  !g_room->doubles_match && !g_room->arena && g_room->size == 2;
+  }
+  if (friend_room) {
+    host::log("friends: left the room on the site; the game lets it go");
+    close_room(Leave::Quit);   // retires the room too
+  } else if (none) {
+    friends::events.current_room({});   // nothing open: whatever the game still counted as its room is retired
   }
 }
 
@@ -4818,6 +4878,11 @@ bool lobby_parked() {
   std::lock_guard<std::mutex> lock(g_mutex);
   return g_parked_lobby != nullptr;
 }
+bool friend_room_parked() {
+  std::lock_guard<std::mutex> lock(g_mutex);
+  return g_parked_friend != nullptr;
+}
+void close_parked_friend_room(const char* why, bool wait) { close_parked_friend(why, {}, wait); }
 
 uint64_t begin_search(bool keep_lobby) {
   const auto epoch = close_room(keep_lobby ? Leave::Next : Leave::Quit);
@@ -4837,6 +4902,7 @@ bool prepare_slippi_match(const std::function<bool()>& cancelled, uint64_t epoch
   // A blend reserved/retired its room before launching the helper. Do not close a newer room.
   const bool blend = epoch != 0;
   if (!epoch) epoch = close_room(Leave::Quit);
+  close_parked_friend("a Slippi search");
   std::shared_future<void> retired;
   { std::lock_guard<std::mutex> lock(g_mutex); retired = g_retired; }
   // A blend has no published YouGame room; older room teardown owns only its old links.
@@ -4867,6 +4933,8 @@ Match find_match(const Search& search, const std::function<bool()>& cancel_reque
     ~SearchScope() { g_search_stopped = {}; g_ticket_retry = nullptr; --g_update_searches; }
   } scope(cancelled);
   if (cancelled()) return fail("Cancelled");
+  // A parked 1v1 Friends room ends with any new search; an invite back into it rejoins it quietly.
+  close_parked_friend("another search", search.friend_room);
   // The Friends lobby runs in one mode (lobby::kSearchMode, Direct) with no connect code or invite
   // room: anything else is refused here, not half-run as another kind of search.
   if (search.friends_lobby && (search.mode != lobby::kSearchMode || !search.direct_code.empty() || !search.friend_room.empty())) {
@@ -6691,6 +6759,7 @@ void open_thread(const std::string& asked, uint64_t generation) {
 
 void open(const std::string& code) {
   close();   // one arena room at a time
+  close_parked_friend("the arena");
   uint64_t generation;
   {
     std::lock_guard<std::mutex> lock(a.mutex);

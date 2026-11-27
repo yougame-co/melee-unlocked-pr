@@ -413,6 +413,11 @@ uint8_t local_rank();
 enum class Leave { Quit, Lost, Over, Next };
 // A Friends lobby room is parked (close_room Next or Lost) for the lobby's next search to adopt.
 bool lobby_parked();
+// A 1v1 Friends room whose other player quit is parked (close_room Lost): its socket holds this player's seat
+// until a new search, leaving the online menus, the site's leave or the game's exit closes it (with the
+// room's leave). close_parked_friend_room logs why. Any thread.
+bool friend_room_parked();
+void close_parked_friend_room(const char* why, bool wait = false);
 
 // The arena's room under YouGame (slippi_arena.cpp): one private room of friends::kArenaSeats for a whole arena,
 // made by its host and joined from an invite. It carries the arena's own messages; each game between two (or

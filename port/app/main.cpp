@@ -2964,6 +2964,7 @@ static int melee_main(int argc, char** argv) {
     yougame::console::console_engine().end("window closed");
 #ifndef MELEE_NO_SLIPPI
     yougame::launcher_room_close();
+    yougame::close_parked_friend_room("game exit", true);   // a parked Friends room is left, not held as away
 #endif
     yougame::console::wait_friends_retired(2000);   // a Leave just before quitting still leaves the room
     ::gx::cache_store::wait_flush_all(caches, caches_due);   // what is left of the 3 s

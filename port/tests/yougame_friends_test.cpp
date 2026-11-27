@@ -180,6 +180,20 @@ int main() {
   CHECK(own.take_join(true) == "Queued");
   CHECK(own.push({{"type","join"},{"room","Ab12"},{"invite","inv-2"}},13));  // idle: the new id rejoins
   CHECK(own.take_join(true) == "Ab12");
+  // The game still counts Ab12 as its room (1.0.33: the site's leave never let it go): a new accepted invite
+  // into it is taken all the same; a bare push or the same id is not, and says why.
+  own.current_room("Ab12");
+  CHECK(!own.push({{"type","join"},{"room","Ab12"}},13));
+  CHECK(std::string(own.ignored()) == "current room");
+  CHECK(!own.push({{"type","join"},{"room","Ab12"},{"invite","inv-2"}},13));
+  CHECK(own.push({{"type","join"},{"room","Ab12"},{"invite","inv-3"}},13));
+  CHECK(own.take_join(true) == "Ab12");
+  CHECK(!own.push({{"type","join"},{"room","Ab12"},{"invite","inv-3"}},13));
+  own.current_room({});                                           // left it (or parked: its friend quit)
+  CHECK(!own.push({{"type","join"},{"room","Ab12"},{"invite","inv-3"}},13));
+  CHECK(std::string(own.ignored()) == "invite already used");
+  CHECK(own.push({{"type","join"},{"room","Ab12"},{"invite","inv-4"}},13));
+  CHECK(own.take_join(true) == "Ab12");
   // The invite's room size (a hint for the first try): 4, or the Friends lobby's compatibility key; none
   // said is 0. The room decides (room_kind below).
   CHECK(own.push({{"type","join"},{"room","Size4Room"},{"players",4}},14));

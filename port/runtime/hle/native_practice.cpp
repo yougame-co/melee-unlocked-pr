@@ -2140,6 +2140,16 @@ void tick() {
     }
     const bool safe = yougame::friends::menu_safe(major, minor) &&
                       (major != 1 || g_friend_menu_ticks >= 120);
+    // A parked 1v1 Friends room (its other player quit) stays while the player is in the online menus. Once
+    // back in them, 3 s anywhere else (the main menu's other rows, a local mode) closes it with the room's leave.
+    static bool parked_back = false;
+    static int parked_away = 0;
+    if (!yougame::friend_room_parked()) { parked_back = false; parked_away = 0; }
+    else if (slippi::online::online_status_visible() || slippi::online::is_online_match()) { parked_back = true; parked_away = 0; }
+    else if (parked_back && ++parked_away >= 180) {
+      yougame::close_parked_friend_room("left the online menus");
+      parked_back = false; parked_away = 0;
+    }
     // The ordinary menu path requests identity as before. Only its validated first hello
     // can schedule a bracket game; boot never waits or consumes the identity wait budget.
     if (!via_channel && g_bridge && major == 1 && safe && yougame::tournament_pending()) {
