@@ -852,12 +852,28 @@ Detected identify_disc(const fs::path& file, Detected d, const ScanOptions& opti
     // Timing for a slow start (a whole-disc read that took minutes on one test box): total and slowest piece.
     const auto read_started = std::chrono::steady_clock::now();
     int64_t slowest_ms = 0;
-    while (in) {
-      const auto piece_started = std::chrono::steady_clock::now();
+#ifdef _WIN32
+    // Its own handle, marked sequential, so Windows reads ahead in large pieces when the image is not cached.
+    HANDLE whole = CreateFileW(file.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                               OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (whole == INVALID_HANDLE_VALUE) { d.message = "Could not read this disc image."; return d; }
+    struct Closer { HANDLE h; ~Closer() { CloseHandle(h); } } whole_closer{whole};
+    const auto read_piece = [&]() -> std::streamsize {
+      DWORD got = 0;
+      if (!ReadFile(whole, chunk.data(), (DWORD)chunk.size(), &got, nullptr)) return 0;
+      return (std::streamsize)got;
+    };
+#else
+    const auto read_piece = [&]() -> std::streamsize {
       in.read((char*)chunk.data(), (std::streamsize)chunk.size());
+      return in.gcount();
+    };
+#endif
+    for (;;) {
+      const auto piece_started = std::chrono::steady_clock::now();
+      const std::streamsize n = read_piece();
       slowest_ms = std::max<int64_t>(slowest_ms, std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - piece_started).count());
-      const std::streamsize n = in.gcount();
       if (n <= 0) break;
       md5.update(chunk.data(), (size_t)n);
       sha.update(chunk.data(), (size_t)n);

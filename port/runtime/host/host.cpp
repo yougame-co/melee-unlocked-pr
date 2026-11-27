@@ -526,6 +526,14 @@ static void prefetch_disc_image(const std::string& path) {
   std::thread([path] { optional_work("disc", [&] {
     struct Completion { ~Completion() { g_disc_prefetch_done.store(true, std::memory_order_release); } } completion;
     SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);   // low CPU and I/O priority
+#ifdef _WIN32
+    // Background mode also gives every page this thread reads the lowest memory priority, so Windows drops the
+    // warmed image first: on one test box the start-up disc check then read it back from the disk 4 KB at a
+    // time, for minutes. The I/O stays low priority; the cached pages get normal priority, the point of warming.
+    MEMORY_PRIORITY_INFORMATION memory_priority{};
+    memory_priority.MemoryPriority = MEMORY_PRIORITY_NORMAL;
+    SetThreadInformation(GetCurrentThread(), ThreadMemoryPriority, &memory_priority, sizeof memory_priority);
+#endif
     const auto begin = std::chrono::steady_clock::now();
     FILE* f = std::fopen(path.c_str(), "rb");
     if (!f) return;
