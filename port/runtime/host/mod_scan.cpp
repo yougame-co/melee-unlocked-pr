@@ -849,8 +849,14 @@ Detected identify_disc(const fs::path& file, Detected d, const ScanOptions& opti
     std::vector<uint8_t> chunk(4u << 20);
     in.clear(); in.seekg(0);
     uint64_t done = 0;
+    // Timing for a slow start (a whole-disc read that took minutes on one test box): total and slowest piece.
+    const auto read_started = std::chrono::steady_clock::now();
+    int64_t slowest_ms = 0;
     while (in) {
+      const auto piece_started = std::chrono::steady_clock::now();
       in.read((char*)chunk.data(), (std::streamsize)chunk.size());
+      slowest_ms = std::max<int64_t>(slowest_ms, std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - piece_started).count());
       const std::streamsize n = in.gcount();
       if (n <= 0) break;
       md5.update(chunk.data(), (size_t)n);
@@ -858,6 +864,12 @@ Detected identify_disc(const fs::path& file, Detected d, const ScanOptions& opti
       done += (uint64_t)n;
     }
     if (done != size) { d.message = "Could not read this disc image."; return d; }
+    if (log) {
+      const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - read_started).count();
+      *log = "whole-disc check read " + std::to_string(done >> 20) + " MB in " + std::to_string(ms) +
+             " ms (slowest 4 MB piece " + std::to_string(slowest_ms) + " ms); ";
+    }
     const std::string md5_hex = md5.hex();
     d.hash = sha.hex();
     in.clear();
