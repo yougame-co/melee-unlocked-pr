@@ -2741,6 +2741,9 @@ static int melee_main(int argc, char** argv) {
 #ifndef MELEE_NO_SLIPPI
   if (yougame::active() || !launcher_room_invite.empty()) {
     yougame::console::responsive_wait([] { return yougame::wait_identity(10000); }, [] { host::window_pump(); });
+    // Marks for a slow start: a Play-together relaunch (appwalk14) logged its sign-in, then nothing until
+    // "starting the game" 183-300 s later. These name the step it sat in.
+    host::log("startup: YouGame sign-in read%s", host::startup_mark().c_str());
     if (launcher_room_invite.empty()) launcher_room_invite=yougame::friends::events.take_launcher_join();
     if (!launcher_room_invite.empty()) {
       screen_label::show("Joining room. Waiting for the host to start...",600.0);
@@ -2827,6 +2830,7 @@ static int melee_main(int argc, char** argv) {
     gx::look_live().exact.store(exact, std::memory_order_relaxed);
     gx::look_live().exact_low_poly.store(!exact || active != "Crystal", std::memory_order_relaxed);   // Crystal's fighters are the full models
     if (exact) host::log("looks: %s from the player's pack", active.c_str());
+    host::log("startup: looks read%s", host::startup_mark().c_str());
   }
   if (host::gameplay::vanilla_only()) {
     source_port::mods::ScanOptions check;
@@ -3002,6 +3006,12 @@ static int melee_main(int argc, char** argv) {
         [] { yougame::console_boot_ready(); }, [] { host::window_pump(); },
         [](const char* text) { screen_label::show(text, 12.0); },
         [](const std::string& text) { host::log("%s", text.c_str()); });
+    // Which way the launch's room went: a console session above, or (a Play-together relaunch into a 1v1 friend
+    // room, whose hello names the room) the Friends join once the menus are up.
+    int seats = 0;
+    if (const auto room = yougame::friends::events.pending_room(&seats); !room.empty())
+      host::log("friends: the launch's room %s goes to the Friends join (%d seats named)%s", room.c_str(), seats,
+                host::startup_mark().c_str());
   }
   if (host::exit_requested()) { shutdown(0); host::end_process(0); }
   host::log("startup: starting the game%s", host::startup_mark().c_str());

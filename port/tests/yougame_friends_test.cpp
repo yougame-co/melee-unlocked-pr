@@ -317,8 +317,10 @@ int main() {
   CHECK(!running_launcher_invite.join_arena());
   CHECK(!running_launcher_invite.mismatch_reroutes("m3abcd234567"));
   launch.hello({{"room", "abcd2345"}});
+  { int seats = -1; CHECK(launch.pending_room(&seats) == "abcd2345" && seats == 0); } // the startup log's read
   CHECK(launch.take_join(false).empty()); // local match: leave it pending
   CHECK(launch.take_join(true) == "abcd2345");
+  CHECK(launch.pending_room().empty());
   CHECK(launch.take_join(true).empty());
   launch.hello({{"room", "abcd2345"}}); // identity refresh must not replay the invite
   CHECK(launch.take_join(true).empty());

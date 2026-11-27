@@ -1821,7 +1821,16 @@ transport::RoomIO room_io(Room& r) {
   return io;
 }
 void end_links(Room& r) { transport::end_links(r, room_io(r)); }
-void pump_room(Room* r) { transport::pump_room(r, g_mutex, room_io(*r)); }
+void close_parked_friend(const char* why, const std::string& rejoin, bool wait, const Room* only);
+void pump_room(Room* r) {
+  transport::pump_room(r, g_mutex, room_io(*r));
+  // A parked 1v1 Friends room whose connection ended for good (its reopen refused, appwalk14 guest: ECONNRESET then
+  // upgrade_refused): nothing can resume it now. It is closed like any other parked ending, so the page's seat
+  // report goes too and the log says so. Off this thread: closing joins this pump.
+  bool dead;
+  { std::lock_guard<std::mutex> lock(g_mutex); dead = !r->stop && g_parked_friend.get() == r; }
+  if (dead) std::thread([r] { close_parked_friend("its connection ended", {}, false, r); }).detach();
+}
 
 // The four-seat Friends lobby the page was last told it holds. Every ending tells the page it is gone, or
 // its two-seat Friends picker keeps refusing with "This Friends room has 4 seats". Only the room the page
@@ -1915,9 +1924,14 @@ void park_arena(std::unique_ptr<Room> old) {
 // Closes the parked 1v1 Friends room, if any. A rejoin of that same room closes the socket quietly, without
 // the room's leave, so Rooms holds the seat for the fresh ticket and socket (and waits, so the old socket is
 // gone before the new one opens); anything else leaves the room. wait: the caller needs it gone (game exit).
-void close_parked_friend(const char* why, const std::string& rejoin = {}, bool wait = false) {
+// only: close it only if it is still that room (a pump that ended; never a room parked since).
+void close_parked_friend(const char* why, const std::string& rejoin = {}, bool wait = false, const Room* only = nullptr) {
   std::unique_ptr<Room> r;
-  { std::lock_guard<std::mutex> lock(g_mutex); r = std::move(g_parked_friend); }
+  {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (only && g_parked_friend.get() != only) return;
+    r = std::move(g_parked_friend);
+  }
   // A room the game went back into (resume) and has left since may still stand on the page: any other room's
   // search retracts it too. Off this thread when not waiting: the bridge may take a second.
   const bool retract = friend_report_other(rejoin);

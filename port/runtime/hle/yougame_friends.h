@@ -560,6 +560,12 @@ class Events {
     std::lock_guard<std::mutex> lock(mutex_);
     return !pending_.empty() && menu_scene_;
   }
+  // The join waiting for the menus (the launch's hello room or a push), and the seats it named (0: none). For the log.
+  std::string pending_room(int* players = nullptr) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (players) *players = pending_players_;
+    return pending_;
+  }
   void menu_scene(bool safe) { std::lock_guard<std::mutex> lock(mutex_); menu_scene_ = safe; }
   std::string take_join(bool safe) {
     std::lock_guard<std::mutex> lock(mutex_);
