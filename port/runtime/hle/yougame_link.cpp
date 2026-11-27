@@ -1585,6 +1585,8 @@ struct Room : transport::RoomState<Socket> {
   // The arena's room (arena_room): between games parked in g_arena, adopted by each game's search, handed
   // back when the game ends (close_room). Never begins or reports a match: arena games are unrated.
   bool arena = false;
+  // Parked in g_parked_friend (g_mutex): the room's next join or back by the friend resumes it (room_io).
+  bool parked_friend = false;
   ~Room() {
     relay_stop(this);   // before the socket goes: the relay sends through it
     // Also runs on cancelled/failed setup: no abandoned links occupy the three slots.
@@ -1745,6 +1747,19 @@ transport::RoomIO room_io(Room& r) {
   transport::RoomIO io;
   // A Friends lobby room keeps its lobby through the match and while parked between matches.
   io.message = [&r](const json& m) {
+    // A parked 1v1 Friends room hears its friend join or come back (any connection but this player's own): the
+    // game goes back in as a 1v1 (friends::Events::resume), so hello and links run and the match starts.
+    // Parked, the room only kept the seat: the friend's game waited on a full room, then "Your opponent did not
+    // answer" (quality appwalk9b, 11-27).
+    if (r.parked_friend) {
+      const auto t = ranked::str(m, "t");
+      if ((t == "join" || t == "back") && m.count("player") && m["player"].is_object() && !r.me.empty() &&
+          ranked::str(m["player"], "id") != r.me && friends::events.resume(r.code)) {
+        r.parked_friend = false;   // once: the search that takes the join closes this room (close_parked_friend)
+        host::log("friends: the friend is back in the parked room; joining it again");
+      }
+      return;
+    }
     if (!r.lobby_session) return;
     r.lobby_session->receive(m);
     if (const char* bad = r.lobby_session->take_bad_frame()) host::log("friends lobby: unusable room frame (%s)", bad);
@@ -1813,28 +1828,53 @@ void pump_room(Room* r) { transport::pump_room(r, g_mutex, room_io(*r)); }
 // still holds is cleared, so a slow ending can never wipe the report of a lobby opened after it.
 std::mutex g_lobby_report_mutex;
 std::string g_lobby_reported;
-void report_lobby(const std::string& code, const json& report) {
+bool g_friend_reported = false;   // g_lobby_reported is a parked 1v1 Friends room's (close_room parks it)
+void report_lobby(const std::string& code, const json& report, bool friend_room = false) {
   std::lock_guard<std::mutex> lock(g_lobby_report_mutex);
   g_lobby_reported = code;
+  g_friend_reported = friend_room;
   bridge(report, 1000);
 }
 // A 2-seat or Doubles room took over the page's report: nothing an older lobby ends may retract it.
 void lobby_report_replaced() {
   std::lock_guard<std::mutex> lock(g_lobby_report_mutex);
   g_lobby_reported.clear();
+  g_friend_reported = false;
 }
 void report_lobby_gone(const std::string& code) {
   std::lock_guard<std::mutex> lock(g_lobby_report_mutex);
   if (code.empty() || g_lobby_reported != code) return;
   g_lobby_reported.clear();
+  g_friend_reported = false;
   host::log("friends lobby: told the page the room is gone");
   try { bridge({{"type", "mpRoom"}, {"code", nullptr}, {"players", json::array()}}, 1000); } catch (...) {}
+}
+// The parked 1v1 room's seat report stands while the game is back in that same room; that room closing, or a
+// search for any other room (`keep` is the room kept), tells the page it is gone, so the page never holds a
+// room the game left. True when a report other than `keep`'s stands.
+bool friend_report_other(const std::string& keep) {
+  std::lock_guard<std::mutex> lock(g_lobby_report_mutex);
+  return g_friend_reported && !g_lobby_reported.empty() && g_lobby_reported != keep;
+}
+void retract_friend_report(const std::string& keep) {
+  std::string code;
+  {
+    std::lock_guard<std::mutex> lock(g_lobby_report_mutex);
+    if (!g_friend_reported || g_lobby_reported.empty() || g_lobby_reported == keep) return;
+    code = g_lobby_reported;
+  }
+  report_lobby_gone(code);
 }
 void shutdown_room(std::unique_ptr<Room> r) {
   if (!r) return;
   r->stop = true;
   if (r->pump.joinable()) r->pump.join();
   if (r->lobby_session) report_lobby_gone(r->code);
+  else if (r->friends) {   // only the parked 1v1 report of this same room (report_lobby_gone checks the code)
+    bool mine;
+    { std::lock_guard<std::mutex> lock(g_lobby_report_mutex); mine = g_friend_reported && g_lobby_reported == r->code; }
+    if (mine) report_lobby_gone(r->code);
+  }
   if (r->lobby_session && r->socket && !r->doubles_match) {   // the lobby's own leave frees the seat at once
     r->lobby_session->leave();
     for (const auto& f : r->lobby_session->due(now_ms())) if (f.value("t", "") != "leave") r->socket->send(f);
@@ -1878,10 +1918,15 @@ void park_arena(std::unique_ptr<Room> old) {
 void close_parked_friend(const char* why, const std::string& rejoin = {}, bool wait = false) {
   std::unique_ptr<Room> r;
   { std::lock_guard<std::mutex> lock(g_mutex); r = std::move(g_parked_friend); }
-  if (!r) return;
-  const bool same = !rejoin.empty() && rejoin == r->code;
-  host::log("friends: parked room closed (%s)", same ? "rejoining it" : why);
-  auto finish = [same](std::unique_ptr<Room> old) {
+  // A room the game went back into (resume) and has left since may still stand on the page: any other room's
+  // search retracts it too. Off this thread when not waiting: the bridge may take a second.
+  const bool retract = friend_report_other(rejoin);
+  if (!r && !retract) return;
+  const bool same = r && !rejoin.empty() && rejoin == r->code;
+  if (r) host::log("friends: parked room closed (%s)", same ? "rejoining it" : why);
+  auto finish = [same, retract, rejoin](std::unique_ptr<Room> old) {
+    if (retract) retract_friend_report(rejoin);
+    if (!old) return;
     if (!same) { shutdown_room(std::move(old)); return; }
     old->stop = true;
     if (old->pump.joinable()) old->pump.join();
@@ -1940,7 +1985,23 @@ uint64_t close_room(Leave why) {
       friends::events.current_room({});   // retired: a new invite into it is taken, a repeat is not
       if (g_parked_friend) std::thread([old = std::move(g_parked_friend)]() mutable { shutdown_room(std::move(old)); }).detach();
       g_parked_friend = std::move(g_room);
+      g_parked_friend->parked_friend = true;   // the friend's join or back resumes it (room_io)
       host::log("friends: the other player left; the room stays (parked)");
+      // The page's seat report for the room the game still holds (Player.tsx mpRoom, as the 4-seat lobby's): with
+      // it the owner's lobby read says "<friend> left the lobby" (native-bring-back readSaysLeft: the game is in
+      // that room). A 1v1 room reported nothing and rooms kept no host_kept, so the line never came (appwalk9b).
+      const Room& p = *g_parked_friend;
+      json seats = json::array();
+      for (const auto& seat : p.participants)
+        if (seat.is_object() && (ranked::str(seat, "connectionId") == p.me || ranked::str(seat, "id") == p.me)) seats.push_back(seat);
+      if (seats.empty() && !p.me.empty()) seats.push_back({{"id", p.me}});
+      if (!seats.empty())
+        std::thread([code = p.code, report = json{{"type", "mpRoom"}, {"code", p.code}, {"queue", "private"}, {"size", 2},
+                                                  {"me", p.me}, {"players", seats}, {"participants", seats},
+                                                  {"revision", p.revision}}] {
+          { std::lock_guard<std::mutex> lock(g_mutex); if (!g_parked_friend || g_parked_friend->code != code) return; }
+          try { report_lobby(code, report, true); host::log("friends: told the page the game still holds the room"); } catch (...) {}
+        }).detach();
       return g_search_generation.value();
     }
     if (why == Leave::Next && !g_room) {   // the lobby's own next search: the parked room is its

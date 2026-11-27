@@ -523,6 +523,24 @@ class Events {
     toast_until_ = now + 6000;
     return true;
   }
+  // A parked 1v1 Friends room heard its friend come back (yougame_link.cpp g_parked_friend): the game goes back
+  // into that room as a 1v1, as an accepted invite would, so hello and links run and the match starts. Parked,
+  // the room only kept the seat, and the friend waited on a full room until "Your opponent did not answer".
+  // Never over a join already queued or a room the game is in.
+  bool resume(const std::string& code) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (code.empty() || !pending_.empty() || !current_room_.empty()) return false;
+    retired_.erase(code); fresh_invite_ = false; invite_room_.clear();
+    pending_ = code;
+    pending_players_ = 2; pending_hinted_ = true; pending_strict_ = false;
+    pending_first_ = kRoom1v1; pending_doubles_ = false;
+    tried_.erase(code);
+    trigger_ = "the friend came back";
+#ifdef MELEE_DOUBLES
+    doubles_join_ = false;
+#endif
+    return true;
+  }
   // Why the last join push was not taken, for the log line ("current room", "retired", ...).
   const char* ignored() const { std::lock_guard<std::mutex> lock(mutex_); return ignored_; }
   bool report_version() {

@@ -194,6 +194,18 @@ int main() {
   CHECK(std::string(own.ignored()) == "invite already used");
   CHECK(own.push({{"type","join"},{"room","Ab12"},{"invite","inv-4"}},13));
   CHECK(own.take_join(true) == "Ab12");
+  // A parked room whose friend came back resumes as a 1v1 (yougame_link room_io), never over another room or join.
+  own.current_room("Ab12");
+  CHECK(!own.resume("Ab12"));                                     // still in it
+  own.current_room({});                                           // parked: retired
+  CHECK(own.push({{"type","join"},{"room","Cd34"},{"invite","inv-5"}},13));
+  CHECK(!own.resume("Ab12"));                                     // a queued join goes first
+  CHECK(own.take_join(true) == "Cd34");
+  CHECK(!own.resume(""));
+  CHECK(own.resume("Ab12"));
+  CHECK(own.trigger() == "the friend came back");
+  CHECK(own.take_join(true) == "Ab12");
+  CHECK(own.join_players() == 2);
   // The invite's room size (a hint for the first try): 4, or the Friends lobby's compatibility key; none
   // said is 0. The room decides (room_kind below).
   CHECK(own.push({{"type","join"},{"room","Size4Room"},{"players",4}},14));
